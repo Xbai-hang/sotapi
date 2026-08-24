@@ -1,0 +1,39 @@
+name: sotapi
+
+services:
+  sotapi:
+    image: ${SOTAPI_IMAGE:-ghcr.io/xbai-hang/sotapi:latest}
+    build:
+      context: .
+      args:
+        VERSION: ${SOTAPI_VERSION:-dev}
+        REVISION: ${SOTAPI_REVISION:-local}
+        CREATED: ${SOTAPI_BUILD_DATE:-1970-01-01T00:00:00Z}
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${SOTAPI_BIND_ADDRESS:-0.0.0.0}:${SOTAPI_PORT:-8080}:8080"
+    volumes:
+      - type: bind
+        source: ${SOTAPI_CONFIG_FILE:-./configs/config.yaml}
+        target: /etc/sotapi/config.yaml
+        read_only: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    stop_grace_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

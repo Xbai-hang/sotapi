@@ -24,9 +24,20 @@ profile.cov
 go.work
 go.work.sum
 
-# env file
+# env files
 .env
+.env.*
+
+# Local runtime configuration (may contain API keys and Bot tokens)
+configs/config.yaml
+
+# Cross-platform release archives
+dist/
 
 # Editor/IDE
-# .idea/
-# .vscode/
+.idea/
+.vscode/
+
+# coding agent
+.codex/
+.claude/

@@ -1,0 +1,49 @@
+server:
+  listen: ":8080"
+  # Polling works with HTTP and an IP address. In webhook mode, set this to the
+  # public HTTPS origin so the Telegram callback URL can be derived from it.
+  base_url: "http://localhost:8080"
+  read_header_timeout: 10s
+  idle_timeout: 2m
+  shutdown_timeout: 10s
+  stream_keep_alive: 15s
+  max_body_bytes: 1048576
+
+auth:
+  # Set mode to none only when the API should be publicly accessible.
+  mode: api_key
+  api_keys:
+    - "replace-with-a-secret"
+request_timeout: 5m
+reasoning_template: "A human is thinking about your request."
+unanswered_threshold: 3
+
+telegram:
+  bot_token: "replace-with-a-telegram-bot-token"
+  api_base_url: "https://api.telegram.org"
+  # Polling is the zero-ingress default. Switching to webhook makes SotAPI call
+  # setWebhook at startup; polling calls deleteWebhook before getUpdates.
+  update_mode: polling
+  # Usually keep queued Telegram replies when switching modes.
+  drop_pending_updates: false
+  poll_timeout: 30s
+  retry_interval: 2s
+  webhook:
+    # Used only in webhook mode. url is optional and defaults to
+    # <server.base_url>/webhooks/telegram. auto derives a stable secret from the
+    # Bot Token without writing another secret file.
+    secret_token: "auto"
+
+models:
+  - id: "sotapi-human"
+    pool: "friends"
+
+pools:
+  - id: "friends"
+    users:
+      - "alice"
+
+users:
+  - id: "alice"
+    channel: "telegram"
+    recipient: "123456789"

@@ -1,0 +1,31 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+  # 手动触发
+  workflow_dispatch:
+  # 其他工作流调用
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: make verify
+      - name: Validate runtime and Compose configuration
+        env:
+          SOTAPI_CONFIG_FILE: ./configs/config.example.yaml
+        run: |
+          go run ./cmd/sotapi config validate --config configs/config.example.yaml
+          docker compose config --quiet
