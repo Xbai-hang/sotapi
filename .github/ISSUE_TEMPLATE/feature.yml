@@ -1,0 +1,56 @@
+name: Feature
+description: Suggest a feature, behavior, or delightfully unnecessary idea
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        SotAPI is a toy project, so useful ideas and funny ideas are both welcome. Describe the experience you want; you do not need to design the internals.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What
+      description: What would you like SotAPI to do?
+      placeholder: I would like SotAPI to ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: Why would this be useful, interesting, or fun?
+      placeholder: This would let me ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of SotAPI is closest to this idea?
+      options:
+        - Protocol
+        - Channel
+        - Routing / fallback
+        - API behavior
+        - Deployment
+        - Developer experience
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: how
+    attributes:
+      label: How
+      description: Optionally sketch the interaction, API, or configuration you have in mind. An implementation design is not required.
+      placeholder: A request could look like ...
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else?
+      description: Add examples, screenshots, links, alternatives, or prior art if they help explain the idea.

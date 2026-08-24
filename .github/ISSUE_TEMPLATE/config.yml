@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation / Wiki
+    url: https://github.com/Xbai-hang/sotapi/wiki
+    about: Read the setup, deployment, architecture, and roadmap documentation.

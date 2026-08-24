@@ -1,0 +1,106 @@
+name: Bug report
+description: Report something that is not working as expected
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping make SotAPI less surprisingly broken. Please search existing issues first and never include credentials.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: Tell us what you expected and what actually happened.
+      placeholder: |
+        Expected: ...
+        Actual: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why does it matter?
+      description: Describe the impact on what you were trying to do.
+      placeholder: This prevents me from ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: how
+    attributes:
+      label: How can we reproduce it?
+      description: Provide the smallest reliable sequence of steps, including a redacted request or config when useful.
+      placeholder: |
+        1. Configure ...
+        2. Start SotAPI with ...
+        3. Send ...
+        4. Observe ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: SotAPI version
+      description: Provide a release version, image tag, or commit SHA.
+      placeholder: v0.1.0 or abc1234
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment method
+      options:
+        - Docker Compose
+        - Prebuilt binary
+        - go run
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: protocol
+    attributes:
+      label: Protocol adapter
+      description: Which client-facing protocol or endpoint were you using?
+      placeholder: OpenAI Chat Completions (/v1/chat/completions)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: channel
+    attributes:
+      label: Channel and update mode
+      options:
+        - Telegram / polling
+        - Telegram / webhook
+        - Not channel-related
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Ubuntu 24.04 (linux/amd64), macOS 15 (darwin/arm64), ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or other context
+      description: Paste relevant redacted logs, screenshots, request IDs, or anything else that may help. This field is optional.
+
+  - type: checkboxes
+    id: sensitive-data
+    attributes:
+      label: Sensitive data
+      options:
+        - label: I removed API keys, Telegram Bot Tokens, webhook secrets, and other credentials from this report and its attachments.
+          required: true
