@@ -132,6 +132,32 @@ func TestServiceCancellation(t *testing.T) {
 	}
 }
 
+func TestServiceReloadCancellationCleansUpPendingRequest(t *testing.T) {
+	service, deliverer, recorder := newTestService(t, nil)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := service.Complete(ctx, validRequest("reload-1"))
+		result <- err
+	}()
+	receive(t, deliverer.deliveries)
+	cancel(ErrServiceReloading)
+
+	if err := receive(t, result); !errors.Is(err, ErrServiceReloading) {
+		t.Fatalf("Complete() error = %v, want ErrServiceReloading", err)
+	}
+	receive(t, deliverer.forgotten)
+	if observation := receive(t, recorder.observations); observation.Outcome != OutcomeCanceled {
+		t.Fatalf("observation = %#v", observation)
+	}
+	if err := service.SubmitReply("reload-1", "too late"); !errors.Is(err, ErrUnknownRequest) {
+		t.Fatalf("late SubmitReply() error = %v, want ErrUnknownRequest", err)
+	}
+	if count := pendingCount(service.pending); count != 0 {
+		t.Fatalf("pending entries = %d, want 0", count)
+	}
+}
+
 func TestServiceDeliveryFailure(t *testing.T) {
 	deliveryError := errors.New("network down")
 	service, deliverer, recorder := newTestService(t, deliveryError)

@@ -23,8 +23,14 @@ import (
 func TestRunStartsAndStopsConfiguredServices(t *testing.T) {
 	requestSeen := make(chan struct{})
 	var once sync.Once
-	telegramServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		once.Do(func() { close(requestSeen) })
+	telegramServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(request.URL.Path, "/getUpdates") {
+			_, _ = writer.Write([]byte(`{"ok":true,"result":[]}`))
+			once.Do(func() { close(requestSeen) })
+			return
+		}
+		_, _ = writer.Write([]byte(`{"ok":true,"result":true}`))
 	}))
 	defer telegramServer.Close()
 	configPath := writeMainConfig(t, telegramServer.URL)

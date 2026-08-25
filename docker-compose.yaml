@@ -15,8 +15,8 @@ services:
       - "${SOTAPI_BIND_ADDRESS:-0.0.0.0}:${SOTAPI_PORT:-8080}:8080"
     volumes:
       - type: bind
-        source: ${SOTAPI_CONFIG_FILE:-./configs/config.yaml}
-        target: /etc/sotapi/config.yaml
+        source: ${SOTAPI_CONFIG_DIR:-./configs}
+        target: /etc/sotapi
         read_only: true
     read_only: true
     tmpfs:

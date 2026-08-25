@@ -11,13 +11,28 @@ import (
 	"github.com/Xbai-hang/sotapi/internal/completion"
 )
 
-// Run prepares the configured Telegram update mode and receives updates until
-// ctx is canceled. Cancellation is considered a clean stop.
+// Run configures the Telegram update mode and receives updates until ctx is
+// canceled. Cancellation is considered a clean stop.
 func (c *Client) Run(ctx context.Context) error {
+	if err := c.Configure(ctx); err != nil {
+		return err
+	}
+	return c.Receive(ctx)
+}
+
+// Configure synchronizes the configured polling or webhook mode with the
+// Telegram Bot API before the runtime begins receiving updates.
+func (c *Client) Configure(ctx context.Context) error {
 	if err := c.configureUpdateMode(ctx); err != nil {
 		return err
 	}
 	c.logger.Info("telegram update mode configured", "mode", c.config.UpdateMode)
+	return nil
+}
+
+// Receive consumes Telegram updates until ctx is canceled. Configure must be
+// called successfully before Receive.
+func (c *Client) Receive(ctx context.Context) error {
 	if c.config.UpdateMode == UpdateModeWebhook {
 		<-ctx.Done()
 		return nil

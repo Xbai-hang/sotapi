@@ -220,6 +220,8 @@ func mapCompletionError(err error) (int, apiError) {
 		return http.StatusGatewayTimeout, newAPIError("server_error", "request_timeout", "the human did not respond before the request timeout", nil)
 	case errors.Is(err, completion.ErrRequestCanceled):
 		return http.StatusRequestTimeout, newAPIError("server_error", "request_canceled", "the request was canceled", nil)
+	case errors.Is(err, completion.ErrServiceReloading):
+		return http.StatusServiceUnavailable, newAPIError("server_error", "service_reloading", "the service is reloading its configuration", nil)
 	case errors.Is(err, completion.ErrDeliveryFailed):
 		return http.StatusBadGateway, newAPIError("server_error", "channel_delivery_failed", "the request could not be delivered to the human", nil)
 	default:
