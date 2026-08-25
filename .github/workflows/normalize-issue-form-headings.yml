@@ -1,0 +1,91 @@
+name: normalize issue form headings
+
+on:
+  issues:
+    types:
+      - opened
+
+permissions:
+  issues: write
+
+jobs:
+  normalize:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Normalize issue form headings
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const issue = context.payload.issue
+            const labels = new Set(
+              issue.labels.map(label =>
+                typeof label === "string" ? label : label.name
+              )
+            )
+
+            const forms = {
+              feature: [
+                "What",
+                "Why",
+                "Area",
+                "How",
+                "Anything else?"
+              ],
+              bug: [
+                "What happened?",
+                "Why does it matter?",
+                "How can we reproduce it?",
+                "SotAPI version",
+                "Deployment method",
+                "Protocol adapter",
+                "Channel and update mode",
+                "Operating system",
+                "Logs or other context",
+                "Sensitive data"
+              ]
+            }
+
+            let headings
+
+            if (labels.has("bug") && !labels.has("enhancement")) {
+              headings = forms.bug
+            } else if (labels.has("enhancement") && !labels.has("bug")) {
+              headings = forms.feature
+            } else {
+              core.notice("Unable to determine the issue form")
+              return
+            }
+
+            const body = issue.body ?? ""
+            const lines = body.split("\n")
+
+            for (const heading of headings) {
+              const source = `### ${heading}`
+              const count = lines.filter(line => line.trim() === source).length
+
+              if (count !== 1) {
+                core.notice(`Expected one \"${source}\", found ${count}`)
+                return
+              }
+            }
+
+            const normalized = lines
+              .map(line => {
+                const trimmed = line.trim()
+                const heading = headings.find(item => `### ${item}` === trimmed)
+
+                if (!heading) {
+                  return line
+                }
+
+                const suffix = line.slice(line.indexOf(trimmed) + trimmed.length)
+                return line.replace(`### ${heading}${suffix}`, `## ${heading}${suffix}`)
+              })
+              .join("\n")
+
+            await github.rest.issues.update({
+              ...context.repo,
+              issue_number: issue.number,
+              body: normalized
+            })
