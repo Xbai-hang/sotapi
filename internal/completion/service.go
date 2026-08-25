@@ -109,6 +109,9 @@ func (s *Service) execute(ctx context.Context, request Request, emit StreamEmitt
 	if err := validateRequest(request); err != nil {
 		return Response{}, err
 	}
+	if errors.Is(context.Cause(ctx), ErrServiceReloading) {
+		return Response{}, ErrServiceReloading
+	}
 	if request.ID == "" {
 		request.ID = "chatcmpl-" + rand.Text()
 	}
@@ -139,6 +142,10 @@ func (s *Service) execute(ctx context.Context, request Request, emit StreamEmitt
 	}
 	delivery, err := s.deliverer.Deliver(requestCtx, target, task)
 	if err != nil {
+		if errors.Is(context.Cause(requestCtx), ErrServiceReloading) {
+			s.record(request.ID, target.User.ID, OutcomeCanceled, started)
+			return Response{}, ErrServiceReloading
+		}
 		s.record(request.ID, target.User.ID, OutcomeDeliveryFailed, started)
 		return Response{}, fmt.Errorf("%w: %v", ErrDeliveryFailed, err)
 	}
@@ -153,6 +160,10 @@ func (s *Service) execute(ctx context.Context, request Request, emit StreamEmitt
 
 	reply, err := awaitReply(requestCtx, replies)
 	if err != nil {
+		if errors.Is(context.Cause(requestCtx), ErrServiceReloading) {
+			s.record(request.ID, target.User.ID, OutcomeCanceled, started)
+			return Response{}, ErrServiceReloading
+		}
 		outcome := OutcomeCanceled
 		terminalErr := ErrRequestCanceled
 		if errors.Is(err, context.DeadlineExceeded) {

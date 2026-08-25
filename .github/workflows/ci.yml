@@ -25,7 +25,7 @@ jobs:
       - run: make verify
       - name: Validate runtime and Compose configuration
         env:
-          SOTAPI_CONFIG_FILE: ./configs/config.example.yaml
+          SOTAPI_CONFIG_DIR: ./configs
         run: |
           go run ./cmd/sotapi config validate --config configs/config.example.yaml
           docker compose config --quiet

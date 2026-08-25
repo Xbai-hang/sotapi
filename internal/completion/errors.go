@@ -9,6 +9,9 @@ var (
 	ErrRequestTimeout = errors.New("completion request timed out")
 	// ErrRequestCanceled indicates that the caller canceled the request.
 	ErrRequestCanceled = errors.New("completion request canceled")
+	// ErrServiceReloading indicates that the runtime canceled the request to
+	// apply a new configuration.
+	ErrServiceReloading = errors.New("completion service is reloading")
 	// ErrDeliveryFailed indicates that the Channel could not deliver the task.
 	ErrDeliveryFailed = errors.New("completion delivery failed")
 	// ErrUnknownRequest indicates that a reply no longer has an active waiter.

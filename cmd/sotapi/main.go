@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,7 +15,6 @@ import (
 	"github.com/Xbai-hang/sotapi/internal/channel/telegram"
 	"github.com/Xbai-hang/sotapi/internal/completion"
 	"github.com/Xbai-hang/sotapi/internal/config"
-	openaiAuth "github.com/Xbai-hang/sotapi/internal/protocol/openai/auth"
 	"github.com/Xbai-hang/sotapi/internal/protocol/openai/chatcompletions"
 	openaiModels "github.com/Xbai-hang/sotapi/internal/protocol/openai/models"
 	"github.com/Xbai-hang/sotapi/internal/routing"
@@ -86,119 +84,6 @@ func defaultConfigPath() string {
 		return value
 	}
 	return "configs/config.yaml"
-}
-
-func run(ctx context.Context, configPath string) error {
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		return err
-	}
-	authenticator, err := openaiAuth.New(cfg.Auth.Mode, cfg.Auth.APIKeys)
-	if err != nil {
-		return err
-	}
-
-	router, err := buildRouter(cfg)
-	if err != nil {
-		return err
-	}
-	statistics, err := stats.NewStore(cfg.UnansweredThreshold)
-	if err != nil {
-		return err
-	}
-
-	logger := slog.Default()
-	forwarder := &replyForwarder{}
-	telegramClient, err := telegram.NewClient(telegram.Config{
-		BotToken:           cfg.Telegram.BotToken,
-		APIBaseURL:         cfg.Telegram.APIBaseURL,
-		UpdateMode:         cfg.Telegram.UpdateMode,
-		DropPendingUpdates: cfg.Telegram.DropPendingUpdates,
-		PollTimeout:        cfg.Telegram.PollTimeout,
-		RetryInterval:      cfg.Telegram.RetryInterval,
-		WebhookURL:         cfg.Telegram.Webhook.URL,
-		WebhookSecretToken: cfg.Telegram.Webhook.SecretToken,
-	}, nil, forwarder, logger)
-	if err != nil {
-		return err
-	}
-	service, err := completion.NewService(router, telegramClient, statistics, completion.ServiceConfig{
-		RequestTimeout:    cfg.RequestTimeout,
-		ReasoningTemplate: cfg.ReasoningTemplate,
-	})
-	if err != nil {
-		return err
-	}
-	forwarder.service = service
-
-	handler, err := chatcompletions.NewHandler(service, chatcompletions.HandlerConfig{
-		Authenticator:     authenticator,
-		MaxBodyBytes:      cfg.Server.MaxBodyBytes,
-		KeepAliveInterval: cfg.Server.StreamKeepAlive,
-	})
-	if err != nil {
-		return err
-	}
-	modelIDs := make([]string, 0, len(cfg.Models))
-	for _, model := range cfg.Models {
-		modelIDs = append(modelIDs, model.ID)
-	}
-	modelsHandler, err := openaiModels.NewHandler(authenticator, modelIDs)
-	if err != nil {
-		return err
-	}
-	httpHandler, err := buildHTTPHandler(handler, modelsHandler, telegramClient)
-	if err != nil {
-		return err
-	}
-
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	server := &http.Server{
-		Addr:              cfg.Server.ListenAddress,
-		Handler:           httpHandler,
-		ReadHeaderTimeout: cfg.Server.ReadHeaderTimeout,
-		IdleTimeout:       cfg.Server.IdleTimeout,
-		BaseContext: func(net.Listener) context.Context {
-			return runCtx
-		},
-	}
-	listener, err := net.Listen("tcp", cfg.Server.ListenAddress)
-	if err != nil {
-		return fmt.Errorf("HTTP server listen: %w", err)
-	}
-
-	errorsChannel := make(chan error, 2)
-	go func() {
-		logger.Info("sotapi listening",
-			"address", listener.Addr().String(),
-			"base_url", cfg.Server.BaseURL,
-			"telegram_update_mode", cfg.Telegram.UpdateMode,
-		)
-		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errorsChannel <- fmt.Errorf("HTTP server: %w", err)
-		}
-	}()
-	go func() {
-		if err := telegramClient.Run(runCtx); err != nil {
-			errorsChannel <- fmt.Errorf("telegram updates: %w", err)
-		}
-	}()
-
-	var runError error
-	select {
-	case <-ctx.Done():
-	case runError = <-errorsChannel:
-	}
-	cancel()
-
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
-	defer shutdownCancel()
-	if err := server.Shutdown(shutdownCtx); err != nil && runError == nil {
-		runError = fmt.Errorf("HTTP server shutdown: %w", err)
-	}
-	logStatistics(logger, statistics.All())
-	return runError
 }
 
 func buildHTTPHandler(chatHandler, modelsHandler http.Handler, telegramClient *telegram.Client) (http.Handler, error) {

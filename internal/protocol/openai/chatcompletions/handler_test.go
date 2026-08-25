@@ -156,6 +156,7 @@ func TestHandlerMapsCompletionErrors(t *testing.T) {
 		{name: "invalid", err: fmt.Errorf("%w: bad", completion.ErrInvalidRequest), wantStatus: http.StatusBadRequest, wantCode: "invalid_request"},
 		{name: "timeout", err: completion.ErrRequestTimeout, wantStatus: http.StatusGatewayTimeout, wantCode: "request_timeout"},
 		{name: "canceled", err: completion.ErrRequestCanceled, wantStatus: http.StatusRequestTimeout, wantCode: "request_canceled"},
+		{name: "reloading", err: completion.ErrServiceReloading, wantStatus: http.StatusServiceUnavailable, wantCode: "service_reloading"},
 		{name: "delivery", err: completion.ErrDeliveryFailed, wantStatus: http.StatusBadGateway, wantCode: "channel_delivery_failed"},
 		{name: "internal", err: errors.New("unexpected"), wantStatus: http.StatusInternalServerError, wantCode: "internal_error"},
 	}
@@ -236,6 +237,44 @@ func TestHandlerStreamErrorBeforeAndAfterStart(t *testing.T) {
 			t.Fatalf("SSE events = %#v", events)
 		}
 	})
+}
+
+func TestHandlerStreamReportsReloadCancellation(t *testing.T) {
+	streamStarted := make(chan struct{})
+	handler := mustHandler(t, &fakeCompleter{stream: func(ctx context.Context, _ completion.Request, emit completion.StreamEmitter) error {
+		if err := emit(completion.StreamChunk{ID: "id", Model: "human", ReasoningDelta: "thinking"}); err != nil {
+			return err
+		}
+		close(streamStarted)
+		<-ctx.Done()
+		return context.Cause(ctx)
+	}}, HandlerConfig{Authenticator: mustAuthenticator(t), MaxBodyBytes: 1 << 20})
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	request := httptest.NewRequest(http.MethodPost, Path, strings.NewReader(validRequestBody(true))).WithContext(ctx)
+	request.Header.Set("Authorization", "Bearer secret")
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(response, request)
+		close(done)
+	}()
+	<-streamStarted
+	cancel(completion.ErrServiceReloading)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not stop after reload cancellation")
+	}
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
+	}
+	events := parseSSE(t, response.Body.String())
+	if len(events) != 3 || !strings.Contains(events[1], `"code":"service_reloading"`) || events[2] != "[DONE]" {
+		t.Fatalf("SSE events = %#v", events)
+	}
 }
 
 func TestHandlerStreamSendsKeepAliveWhileWaiting(t *testing.T) {

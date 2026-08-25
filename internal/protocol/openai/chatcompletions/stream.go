@@ -3,6 +3,7 @@ package chatcompletions
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -76,6 +77,16 @@ func (h *Handler) serveStream(writer http.ResponseWriter, request *http.Request,
 				flusher.Flush()
 			}
 		case <-request.Context().Done():
+			if err := context.Cause(request.Context()); errors.Is(err, completion.ErrServiceReloading) {
+				if !started {
+					writeCompletionError(writer, err)
+					return
+				}
+				if writeSSEJSON(writer, errorPayload(err)) == nil {
+					_ = writeSSEData(writer, "[DONE]")
+					flusher.Flush()
+				}
+			}
 			return
 		}
 	}
