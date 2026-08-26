@@ -130,7 +130,7 @@ curl http://localhost:8080/v1/chat/completions \
 
 此时 curl 会保持等待，Telegram 会收到一条 SotAPI 任务。回答者必须使用 Telegram 的**回复**功能回答该任务消息；SotAPI 收到回复后，curl 才会返回 Chat Completion。
 
-默认请求超时为 5 分钟。需要更多回答时间时，请修改 `request_timeout`，并确保客户端和反向代理的超时都比它更长。
+默认真人响应超时为 5 分钟。需要更多回答时间时，请修改 `human.response_timeout`，并确保客户端和反向代理的超时都比它更长。
 
 ## 客户端接入
 
@@ -169,6 +169,7 @@ SotAPI 的核心请求生命周期不绑定某一家 LLM API。不同协议在�
 - 普通 JSON 与 `stream: true` 的 SSE 响应；
 - 单候选 `n=1`；
 - DeepSeek-style `reasoning_content`；
+- 真人回复超时或真人离线时返回可配置的 fallback；
 - 与当前协议一致的错误结构。
 
 MVP 目前聚焦文本；Tool Calling、Structured Output、多模态内容及其他 Adapter 的进度见[开发路线](https://github.com/Xbai-hang/sotapi/wiki/Development-Roadmap)。
@@ -182,6 +183,8 @@ MVP 目前聚焦文本；Tool Calling、Structured Output、多模态内容及�
 
 两种模式的 API 和回答体验相同，只需修改 `telegram.update_mode` 后重启。一个 Telegram Bot 不应同时交给 SotAPI 和其他接收服务使用；polling 与 webhook 也不能在 Telegram 端同时生效。
 
+真人默认在线。开启 `human.auto_offline.enabled` 后，连续达到配置次数仍未在响应时限内回复会自动离线，并收到 Telegram 通知；发送 `/online` 可恢复在线并清零连续未回复次数。真人离线期间的新请求会立即获得 `fallback.template` 响应。
+
 Webhook 的 HTTPS、Nginx/OpenResty 反向代理与超时配置见[部署指南](https://github.com/Xbai-hang/sotapi/wiki/Deployment#https-webhook-部署)。
 
 ## 玩之前看一眼
@@ -189,8 +192,8 @@ Webhook 的 HTTPS、Nginx/OpenResty 反向代理与超时配置见[部署指南]
 - 每次请求的完整文本上下文都会发送到配置的 Telegram 会话，请只选择可信回答者。
 - `configs/config.yaml` 包含 API Key 和 Bot Token，已被 Git 忽略；请限制文件权限并保护备份。
 - 公网 API 应同时使用 HTTPS 与 `auth.mode: api_key`。
-- 默认 `request_timeout` 为 5 分钟；反向代理的读取超时必须大于该值。
-- 当前 Pending 请求、回复关联和统计保存在内存中，进程重启会终止所有在途请求。
+- 默认 `human.response_timeout` 为 5 分钟；反向代理的读取超时必须大于该值。
+- 当前 Pending 请求、回复关联、在线状态和统计保存在内存中；进程重启会终止所有在途请求，并将真人恢复为默认在线。
 - 当前每个用户池只能配置一名回答者，单实例部署最符合现阶段的状态模型。
 
 ## 文档

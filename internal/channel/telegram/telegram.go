@@ -50,6 +50,8 @@ type Config struct {
 type ReplyHandler interface {
 	// SubmitReply associates content with a still-pending completion request.
 	SubmitReply(requestID, content string) error
+	// SetOnline restores the human identified by a Channel recipient.
+	SetOnline(channel, recipient string) error
 }
 
 // Client delivers tasks through Telegram and receives replies through the
@@ -179,6 +181,26 @@ func (c *Client) Deliver(ctx context.Context, target routing.Target, task comple
 // delivery. Telegram messages themselves are intentionally retained.
 func (c *Client) Forget(delivery completion.Delivery) {
 	c.correlations.forget(delivery.ID)
+}
+
+// Notify presents a channel-independent lifecycle event to a Telegram user.
+// Delivery is best effort and cannot change the caller's completion result.
+func (c *Client) Notify(ctx context.Context, target routing.Target, notification completion.Notification) {
+	if target.User.Channel != channelName {
+		c.logger.Warn("telegram notification ignored", "user_id", target.User.ID, "channel", target.User.Channel)
+		return
+	}
+	var text string
+	switch notification.Kind {
+	case completion.NotificationAutoOffline:
+		text = fmt.Sprintf("你已连续 %d 次未在规定时间内回复，现已自动离线。发送 /online 可恢复在线。", notification.MissedReplies)
+	default:
+		c.logger.Warn("telegram notification ignored", "user_id", target.User.ID, "kind", notification.Kind)
+		return
+	}
+	if _, err := c.sendMessage(ctx, target.User.Recipient, text); err != nil {
+		c.logger.Warn("telegram notification failed", "user_id", target.User.ID, "kind", notification.Kind, "error", err)
+	}
 }
 
 func (c *Client) sendMessage(ctx context.Context, recipient, text string) (telegramMessage, error) {

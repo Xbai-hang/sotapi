@@ -221,6 +221,56 @@ func TestHandleUpdateIgnoresUnrelatedMessages(t *testing.T) {
 	}
 }
 
+func TestHandleUpdateOnlineCommandRestoresConfiguredRecipient(t *testing.T) {
+	messages := make(chan sendMessageRequest, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var payload sendMessageRequest
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Errorf("decode sendMessage: %v", err)
+		}
+		messages <- payload
+		writeTelegramResult(t, writer, telegramMessage{MessageID: 8, Chat: telegramChat{ID: 100}})
+	}))
+	defer server.Close()
+
+	replies := &fakeReplyHandler{online: make(chan onlineCommand, 1)}
+	client := newTestClient(t, server.URL, replies)
+	if err := client.handleUpdate(telegramUpdate{Message: &telegramMessage{Chat: telegramChat{ID: 100}, Text: " /online "}}); err != nil {
+		t.Fatalf("handleUpdate() error = %v", err)
+	}
+	command := receiveTelegram(t, replies.online)
+	if command.channel != "telegram" || command.recipient != "100" {
+		t.Fatalf("online command = %#v", command)
+	}
+	message := receiveTelegram(t, messages)
+	if message.ChatID != "100" || !strings.Contains(message.Text, "恢复在线") {
+		t.Fatalf("confirmation message = %#v", message)
+	}
+}
+
+func TestNotifyFormatsAutoOfflineMessage(t *testing.T) {
+	messages := make(chan sendMessageRequest, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var payload sendMessageRequest
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Errorf("decode sendMessage: %v", err)
+		}
+		messages <- payload
+		writeTelegramResult(t, writer, telegramMessage{MessageID: 9, Chat: telegramChat{ID: 100}})
+	}))
+	defer server.Close()
+	client := newTestClient(t, server.URL, &fakeReplyHandler{})
+
+	client.Notify(context.Background(), telegramTarget(), completion.Notification{
+		Kind:          completion.NotificationAutoOffline,
+		MissedReplies: 3,
+	})
+	message := receiveTelegram(t, messages)
+	if message.ChatID != "configured-recipient" || !strings.Contains(message.Text, "3") || !strings.Contains(message.Text, "/online") {
+		t.Fatalf("offline notification = %#v", message)
+	}
+}
+
 func TestHandleUpdateReturnsReplyHandlerError(t *testing.T) {
 	replyError := errors.New("request expired")
 	replies := &fakeReplyHandler{err: replyError}
@@ -373,12 +423,25 @@ type submittedReply struct {
 
 type fakeReplyHandler struct {
 	submissions chan submittedReply
+	online      chan onlineCommand
 	err         error
+}
+
+type onlineCommand struct {
+	channel   string
+	recipient string
 }
 
 func (h *fakeReplyHandler) SubmitReply(requestID, content string) error {
 	if h.submissions != nil {
 		h.submissions <- submittedReply{requestID: requestID, content: content}
+	}
+	return h.err
+}
+
+func (h *fakeReplyHandler) SetOnline(channel, recipient string) error {
+	if h.online != nil {
+		h.online <- onlineCommand{channel: channel, recipient: recipient}
 	}
 	return h.err
 }
@@ -398,6 +461,8 @@ func (h *cancelingReplyHandler) SubmitReply(requestID, content string) error {
 	h.cancel()
 	return nil
 }
+
+func (*cancelingReplyHandler) SetOnline(string, string) error { return nil }
 
 func newTestClient(t *testing.T, baseURL string, replies ReplyHandler) *Client {
 	t.Helper()

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Xbai-hang/sotapi/internal/availability"
 	"github.com/Xbai-hang/sotapi/internal/routing"
 )
 
@@ -25,6 +26,20 @@ type Deliverer interface {
 	Deliver(ctx context.Context, target routing.Target, task Task) (Delivery, error)
 	// Forget releases Channel-side state associated with delivery.
 	Forget(delivery Delivery)
+	// Notify sends a lifecycle notification to a human. Notification delivery
+	// is best effort and must not change the caller's completion result.
+	Notify(ctx context.Context, target routing.Target, notification Notification)
+}
+
+// NotificationKind identifies a channel-independent human notification.
+type NotificationKind string
+
+const NotificationAutoOffline NotificationKind = "auto_offline"
+
+// Notification describes a human lifecycle event for Channel presentation.
+type Notification struct {
+	Kind          NotificationKind
+	MissedReplies int
 }
 
 // Recorder consumes request lifecycle observations.
@@ -45,21 +60,29 @@ type ServiceConfig struct {
 // Service coordinates routing, Channel delivery, reply correlation and
 // terminal statistics for one completion request.
 type Service struct {
-	router    *routing.Router
-	deliverer Deliverer
-	recorder  Recorder
-	pending   *pendingBroker
-	timeout   time.Duration
-	reasoning string
+	router       *routing.Router
+	deliverer    Deliverer
+	recorder     Recorder
+	availability *availability.Store
+	fallback     Fallback
+	pending      *pendingBroker
+	timeout      time.Duration
+	reasoning    string
 }
 
 // NewService constructs a completion Service with immutable dependencies.
-func NewService(router *routing.Router, deliverer Deliverer, recorder Recorder, cfg ServiceConfig) (*Service, error) {
+func NewService(router *routing.Router, deliverer Deliverer, recorder Recorder, state *availability.Store, fallback Fallback, cfg ServiceConfig) (*Service, error) {
 	if router == nil {
 		return nil, errors.New("completion: router is required")
 	}
 	if deliverer == nil {
 		return nil, errors.New("completion: deliverer is required")
+	}
+	if state == nil {
+		return nil, errors.New("completion: availability store is required")
+	}
+	if fallback == nil {
+		return nil, errors.New("completion: fallback is required")
 	}
 	if cfg.RequestTimeout <= 0 {
 		return nil, errors.New("completion: request timeout must be positive")
@@ -69,13 +92,24 @@ func NewService(router *routing.Router, deliverer Deliverer, recorder Recorder, 
 		recorder = discardRecorder{}
 	}
 	return &Service{
-		router:    router,
-		deliverer: deliverer,
-		recorder:  recorder,
-		pending:   newPendingBroker(),
-		timeout:   cfg.RequestTimeout,
-		reasoning: cfg.ReasoningTemplate,
+		router:       router,
+		deliverer:    deliverer,
+		recorder:     recorder,
+		availability: state,
+		fallback:     fallback,
+		pending:      newPendingBroker(),
+		timeout:      cfg.RequestTimeout,
+		reasoning:    cfg.ReasoningTemplate,
 	}, nil
+}
+
+// SetOnline restores the configured human identified by a Channel endpoint and
+// clears their consecutive missed reply count.
+func (s *Service) SetOnline(channel, recipient string) (routing.User, error) {
+	if strings.TrimSpace(channel) == "" || strings.TrimSpace(recipient) == "" {
+		return routing.User{}, fmt.Errorf("%w: channel and recipient are required", ErrInvalidRequest)
+	}
+	return s.availability.SetOnline(channel, recipient)
 }
 
 // Complete waits for a human answer and returns one aggregated response.
@@ -112,6 +146,9 @@ func (s *Service) execute(ctx context.Context, request Request, emit StreamEmitt
 	if errors.Is(context.Cause(ctx), ErrServiceReloading) {
 		return Response{}, ErrServiceReloading
 	}
+	if ctx.Err() != nil {
+		return Response{}, fmt.Errorf("%w: %v", ErrRequestCanceled, ctx.Err())
+	}
 	if request.ID == "" {
 		request.ID = "chatcmpl-" + rand.Text()
 	}
@@ -119,6 +156,9 @@ func (s *Service) execute(ctx context.Context, request Request, emit StreamEmitt
 	target, err := s.router.Resolve(request.Model)
 	if err != nil {
 		return Response{}, err
+	}
+	if !s.availability.IsOnline(target.User.ID) {
+		return s.generateFallback(ctx, request, "", emit)
 	}
 
 	timeout := request.Timeout
@@ -146,6 +186,10 @@ func (s *Service) execute(ctx context.Context, request Request, emit StreamEmitt
 			s.record(request.ID, target.User.ID, OutcomeCanceled, started)
 			return Response{}, ErrServiceReloading
 		}
+		if ctx.Err() != nil {
+			s.record(request.ID, target.User.ID, OutcomeCanceled, started)
+			return Response{}, fmt.Errorf("%w: %v", ErrRequestCanceled, err)
+		}
 		s.record(request.ID, target.User.ID, OutcomeDeliveryFailed, started)
 		return Response{}, fmt.Errorf("%w: %v", ErrDeliveryFailed, err)
 	}
@@ -164,14 +208,26 @@ func (s *Service) execute(ctx context.Context, request Request, emit StreamEmitt
 			s.record(request.ID, target.User.ID, OutcomeCanceled, started)
 			return Response{}, ErrServiceReloading
 		}
-		outcome := OutcomeCanceled
-		terminalErr := ErrRequestCanceled
-		if errors.Is(err, context.DeadlineExceeded) {
-			outcome = OutcomeTimedOut
-			terminalErr = ErrRequestTimeout
+		if ctx.Err() != nil {
+			s.record(request.ID, target.User.ID, OutcomeCanceled, started)
+			return Response{}, fmt.Errorf("%w: %v", ErrRequestCanceled, err)
 		}
-		s.record(request.ID, target.User.ID, outcome, started)
-		return Response{}, fmt.Errorf("%w: %v", terminalErr, err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			s.record(request.ID, target.User.ID, OutcomeTimedOut, started)
+			transition, stateErr := s.availability.RecordMissedReply(target.User.ID)
+			if stateErr != nil {
+				return Response{}, stateErr
+			}
+			if transition.BecameOffline {
+				s.notifyOffline(ctx, target, transition.MissedReplies)
+			}
+			return s.generateFallback(ctx, request, s.reasoning, emit)
+		}
+		s.record(request.ID, target.User.ID, OutcomeCanceled, started)
+		return Response{}, fmt.Errorf("%w: %v", ErrRequestCanceled, err)
+	}
+	if err := s.availability.RecordReply(target.User.ID); err != nil {
+		return Response{}, err
 	}
 
 	response := Response{
@@ -192,6 +248,37 @@ func (s *Service) execute(ctx context.Context, request Request, emit StreamEmitt
 	}
 
 	return response, nil
+}
+
+func (s *Service) generateFallback(ctx context.Context, request Request, reasoning string, emit StreamEmitter) (Response, error) {
+	content, err := s.fallback.Generate(ctx, request)
+	if err != nil {
+		if errors.Is(context.Cause(ctx), ErrServiceReloading) {
+			return Response{}, ErrServiceReloading
+		}
+		if ctx.Err() != nil {
+			return Response{}, fmt.Errorf("%w: %v", ErrRequestCanceled, err)
+		}
+		return Response{}, fmt.Errorf("%w: %v", ErrFallbackFailed, err)
+	}
+	response := Response{ID: request.ID, Model: request.Model, Reasoning: reasoning, Content: content}
+	if emit != nil {
+		if err := emit(StreamChunk{ID: request.ID, Model: request.Model, ContentDelta: content}); err != nil {
+			return Response{}, err
+		}
+		if err := emit(StreamChunk{ID: request.ID, Model: request.Model, Done: true}); err != nil {
+			return Response{}, err
+		}
+	}
+	return response, nil
+}
+
+func (s *Service) notifyOffline(parent context.Context, target routing.Target, missedReplies int) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 10*time.Second)
+		defer cancel()
+		s.deliverer.Notify(ctx, target, Notification{Kind: NotificationAutoOffline, MissedReplies: missedReplies})
+	}()
 }
 
 func validateRequest(request Request) error {

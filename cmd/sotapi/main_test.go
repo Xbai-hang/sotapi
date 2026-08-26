@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Xbai-hang/sotapi/internal/availability"
 	"github.com/Xbai-hang/sotapi/internal/channel/telegram"
 	"github.com/Xbai-hang/sotapi/internal/completion"
 	"github.com/Xbai-hang/sotapi/internal/config"
@@ -184,7 +185,18 @@ func TestReplyForwarderDelegatesToService(t *testing.T) {
 		t.Fatalf("routing.NewRouter() error = %v", err)
 	}
 	deliverer := &mainDeliverer{tasks: make(chan completion.Task, 1)}
-	service, err := completion.NewService(router, deliverer, nil, completion.ServiceConfig{RequestTimeout: time.Second})
+	state, err := availability.NewStore(
+		[]routing.User{{ID: "alice", Channel: "telegram", Recipient: "123"}},
+		availability.Config{Enabled: true, AfterMissedReplies: 3},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallback, err := completion.NewTemplateFallback("fallback")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := completion.NewService(router, deliverer, nil, state, fallback, completion.ServiceConfig{RequestTimeout: time.Second})
 	if err != nil {
 		t.Fatalf("completion.NewService() error = %v", err)
 	}
@@ -208,6 +220,9 @@ func TestReplyForwarderDelegatesToService(t *testing.T) {
 	}
 	if err := <-result; err != nil {
 		t.Fatalf("Complete() error = %v", err)
+	}
+	if err := forwarder.SetOnline("telegram", "123"); err != nil {
+		t.Fatalf("SetOnline() error = %v", err)
 	}
 }
 
@@ -240,6 +255,8 @@ func (d *mainDeliverer) Deliver(_ context.Context, _ routing.Target, task comple
 
 func (*mainDeliverer) Forget(completion.Delivery) {}
 
+func (*mainDeliverer) Notify(context.Context, routing.Target, completion.Notification) {}
+
 func newMainWebhookClient(t *testing.T, webhookURL string) *telegram.Client {
 	t.Helper()
 	client, err := telegram.NewClient(telegram.Config{
@@ -267,8 +284,15 @@ server:
 auth:
   mode: api_key
   api_keys: [secret]
-request_timeout: 1s
-reasoning_template: waiting
+human:
+  response_timeout: 1s
+  reasoning_template: waiting
+  auto_offline:
+    enabled: true
+    after_missed_replies: 3
+fallback:
+  mode: template
+  template: fallback answer
 telegram:
   bot_token: token
   api_base_url: "` + telegramURL + `"
