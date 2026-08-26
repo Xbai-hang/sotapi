@@ -22,10 +22,18 @@ human:
     after_missed_replies: 3
 
 fallback:
-  # Phase one supports template. Additional providers can be added without
-  # changing the human response policy above.
+  # Use llm when the user pool has no online human. Provider failures return
+  # the template below.
   mode: template
   template: "The human responder is currently unavailable. Please try again later."
+  llm:
+    base_url: "https://api.openai.com"
+    # Prefer SOTAPI_FALLBACK_LLM_API_KEY instead of storing a production key here.
+    api_key: ""
+    model: ""
+    timeout: 30s
+    # Controls native streaming between SotAPI and the fallback model.
+    stream: false
 
 telegram:
   bot_token: "replace-with-a-telegram-bot-token"

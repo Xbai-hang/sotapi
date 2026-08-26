@@ -14,6 +14,7 @@ import (
 	"github.com/Xbai-hang/sotapi/internal/channel/telegram"
 	"github.com/Xbai-hang/sotapi/internal/completion"
 	"github.com/Xbai-hang/sotapi/internal/config"
+	fallbackOpenAI "github.com/Xbai-hang/sotapi/internal/fallback/openai"
 	openaiAuth "github.com/Xbai-hang/sotapi/internal/protocol/openai/auth"
 	"github.com/Xbai-hang/sotapi/internal/protocol/openai/chatcompletions"
 	openaiModels "github.com/Xbai-hang/sotapi/internal/protocol/openai/models"
@@ -142,7 +143,7 @@ func newRuntimeInstance(cfg config.Config, logger *slog.Logger) (*runtimeInstanc
 	if err != nil {
 		return nil, err
 	}
-	fallback, err := completion.NewTemplateFallback(cfg.Fallback.Template)
+	fallback, err := buildFallback(cfg.Fallback)
 	if err != nil {
 		return nil, err
 	}
@@ -203,6 +204,27 @@ func newRuntimeInstance(cfg config.Config, logger *slog.Logger) (*runtimeInstanc
 			IdleTimeout:       cfg.Server.IdleTimeout,
 		},
 	}, nil
+}
+
+func buildFallback(cfg config.FallbackConfig) (completion.Fallback, error) {
+	template, err := completion.NewTemplateFallback(cfg.Template)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Mode == "template" {
+		return template, nil
+	}
+	llm, err := fallbackOpenAI.New(fallbackOpenAI.Config{
+		BaseURL: cfg.LLM.BaseURL,
+		APIKey:  cfg.LLM.APIKey,
+		Model:   cfg.LLM.Model,
+		Timeout: cfg.LLM.Timeout,
+		Stream:  cfg.LLM.Stream,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return completion.NewFallbackChain(llm, template)
 }
 
 func (r *runtimeInstance) start(parent context.Context) error {

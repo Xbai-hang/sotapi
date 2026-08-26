@@ -37,7 +37,7 @@ sequenceDiagram
 ## 它怎么玩
 
 - **客户端以为自己在调用模型**：它照常发送协议请求、API Key 和模型名称。
-- **“模型”首先可以是 Channel 另一头的人**：朋友、群友或者你自己都可以回答；后续也可以让 LLM fallback 在真人不在线时接一些简单请求。
+- **“模型”首先可以是 Channel 另一头的人**：朋友、群友或者你自己都可以回答；真人链路不可用时，也可以让独立配置的 LLM 接手回答。
 - **协议只是外壳**：不同 LLM API 由各自的 Adapter 接入同一个真人请求生命周期。
 - **不需要做回答后台**：真人只需在 Telegram 中回复任务消息。
 - **本地也能玩**：默认 polling 模式不要求公网域名或 HTTPS。
@@ -169,7 +169,7 @@ SotAPI 的核心请求生命周期不绑定某一家 LLM API。不同协议在�
 - 普通 JSON 与 `stream: true` 的 SSE 响应；
 - 单候选 `n=1`；
 - DeepSeek-style `reasoning_content`；
-- 真人回复超时或真人离线时返回可配置的 fallback；
+- 用户池没有在线真人时进入可配置的 fallback；
 - 与当前协议一致的错误结构。
 
 MVP 目前聚焦文本；Tool Calling、Structured Output、多模态内容及其他 Adapter 的进度见[开发路线](https://github.com/Xbai-hang/sotapi/wiki/Development-Roadmap)。
@@ -183,14 +183,32 @@ MVP 目前聚焦文本；Tool Calling、Structured Output、多模态内容及�
 
 两种模式的 API 和回答体验相同，只需修改 `telegram.update_mode` 后重启。一个 Telegram Bot 不应同时交给 SotAPI 和其他接收服务使用；polling 与 webhook 也不能在 Telegram 端同时生效。
 
-真人默认在线。开启 `human.auto_offline.enabled` 后，连续达到配置次数仍未在响应时限内回复会自动离线，并收到 Telegram 通知；发送 `/online` 可恢复在线并清零连续未回复次数。真人离线期间的新请求会立即获得 `fallback.template` 响应。
+真人默认在线。开启 `human.auto_offline.enabled` 后，连续达到配置次数仍未在响应时限内回复会自动离线，并收到 Telegram 通知；发送 `/online` 可恢复在线并清零连续未回复次数。
+
+Fallback 默认直接返回 `fallback.template`。将 `fallback.mode` 设为 `llm` 后，用户池没有在线真人时会先请求 `fallback.llm` 中配置的 OpenAI-compatible Chat Completions 服务；调用失败时仍返回模板：
+
+```yaml
+fallback:
+  mode: llm
+  template: "The human responder is currently unavailable. Please try again later."
+  llm:
+    base_url: "https://api.openai.com"
+    api_key: ""
+    model: "your-fallback-model"
+    timeout: 30s
+    stream: false
+```
+
+建议通过 `SOTAPI_FALLBACK_LLM_API_KEY` 环境变量提供模型密钥。`stream` 控制 SotAPI 与 fallback 模型之间是否使用原生流式响应；Caller 的响应格式仍由其请求中的 `stream` 决定。
+
+LLM 调用使用请求副本：Caller 提供的 `system` 和 `developer` 消息会被移除，并替换为 SotAPI 的内置 system prompt；投递给真人的原始消息不受影响。
 
 Webhook 的 HTTPS、Nginx/OpenResty 反向代理与超时配置见[部署指南](https://github.com/Xbai-hang/sotapi/wiki/Deployment#https-webhook-部署)。
 
 ## 玩之前看一眼
 
 - 每次请求的完整文本上下文都会发送到配置的 Telegram 会话，请只选择可信回答者。
-- `configs/config.yaml` 包含 API Key 和 Bot Token，已被 Git 忽略；请限制文件权限并保护备份。
+- `configs/config.yaml` 包含 API Key 和 Bot Token，已被 Git 忽略；请限制文件权限并保护备份。LLM fallback 的密钥建议仅通过环境变量注入。
 - 公网 API 应同时使用 HTTPS 与 `auth.mode: api_key`。
 - 默认 `human.response_timeout` 为 5 分钟；反向代理的读取超时必须大于该值。
 - 当前 Pending 请求、回复关联、在线状态和统计保存在内存中；进程重启会终止所有在途请求，并将真人恢复为默认在线。

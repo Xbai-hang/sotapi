@@ -117,6 +117,49 @@ func TestBuildRouterMapsConfiguration(t *testing.T) {
 	}
 }
 
+func TestBuildFallbackSelectsTemplateOrLLMChain(t *testing.T) {
+	template, err := buildFallback(config.FallbackConfig{Mode: "template", Template: "template answer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := template.Generate(context.Background(), completion.Request{})
+	if err != nil || content != "template answer" {
+		t.Fatalf("template Generate() = %q, %v", content, err)
+	}
+
+	providerAvailable := true
+	provider := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if !providerAvailable {
+			http.Error(writer, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"model answer"},"finish_reason":"stop"}]}`))
+	}))
+	defer provider.Close()
+	chain, err := buildFallback(config.FallbackConfig{
+		Mode:     "llm",
+		Template: "template answer",
+		LLM: config.LLMFallbackConfig{
+			BaseURL: provider.URL,
+			Model:   "fallback-model",
+			Timeout: time.Second,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err = chain.Generate(context.Background(), completion.Request{Messages: []completion.Message{{Role: "user", Content: "hello"}}})
+	if err != nil || content != "model answer" {
+		t.Fatalf("LLM Generate() = %q, %v", content, err)
+	}
+	providerAvailable = false
+	content, err = chain.Generate(context.Background(), completion.Request{Messages: []completion.Message{{Role: "user", Content: "hello"}}})
+	if err != nil || content != "template answer" {
+		t.Fatalf("terminal Generate() = %q, %v", content, err)
+	}
+}
+
 func TestBuildHTTPHandlerRoutesWebhookByExactPath(t *testing.T) {
 	telegramClient := newMainWebhookClient(t, "https://sotapi.example.com/webhooks/{telegram}")
 	chatHandler := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {

@@ -39,10 +39,21 @@ type AutoOfflineConfig struct {
 }
 
 // FallbackConfig controls responses generated when no human answer is
-// available. Phase one supports the template mode.
+// available.
 type FallbackConfig struct {
-	Mode     string `mapstructure:"mode"`
-	Template string `mapstructure:"template"`
+	Mode     string            `mapstructure:"mode"`
+	Template string            `mapstructure:"template"`
+	LLM      LLMFallbackConfig `mapstructure:"llm"`
+}
+
+// LLMFallbackConfig configures the model used after the human path cannot
+// produce an answer. The current adapter uses OpenAI Chat Completions.
+type LLMFallbackConfig struct {
+	BaseURL string        `mapstructure:"base_url"`
+	APIKey  string        `mapstructure:"api_key"`
+	Model   string        `mapstructure:"model"`
+	Timeout time.Duration `mapstructure:"timeout"`
+	Stream  bool          `mapstructure:"stream"`
 }
 
 // AuthConfig controls access to the public API. Mode is either api_key or
@@ -171,11 +182,23 @@ func (c Config) Validate() error {
 	if c.Human.AutoOffline.AfterMissedReplies <= 0 {
 		return errors.New("config: human.auto_offline.after_missed_replies must be positive")
 	}
-	if c.Fallback.Mode != "template" {
-		return fmt.Errorf("config: fallback.mode must be template, got %q", c.Fallback.Mode)
-	}
 	if strings.TrimSpace(c.Fallback.Template) == "" {
-		return errors.New("config: fallback.template is required in template mode")
+		return errors.New("config: fallback.template is required")
+	}
+	switch c.Fallback.Mode {
+	case "template":
+	case "llm":
+		if err := validateHTTPURL("fallback.llm.base_url", c.Fallback.LLM.BaseURL); err != nil {
+			return err
+		}
+		if strings.TrimSpace(c.Fallback.LLM.Model) == "" {
+			return errors.New("config: fallback.llm.model is required")
+		}
+		if c.Fallback.LLM.Timeout <= 0 {
+			return errors.New("config: fallback.llm.timeout must be positive")
+		}
+	default:
+		return fmt.Errorf("config: fallback.mode must be template or llm, got %q", c.Fallback.Mode)
 	}
 	if strings.TrimSpace(c.Telegram.BotToken) == "" {
 		return errors.New("config: telegram.bot_token or SOTAPI_TELEGRAM_BOT_TOKEN is required")
@@ -219,6 +242,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("human.auto_offline.after_missed_replies", 3)
 	v.SetDefault("fallback.mode", "template")
 	v.SetDefault("fallback.template", "The human responder is currently unavailable. Please try again later.")
+	v.SetDefault("fallback.llm.base_url", "https://api.openai.com")
+	v.SetDefault("fallback.llm.api_key", "")
+	v.SetDefault("fallback.llm.model", "")
+	v.SetDefault("fallback.llm.timeout", "30s")
+	v.SetDefault("fallback.llm.stream", false)
 	v.SetDefault("telegram.bot_token", "")
 	v.SetDefault("telegram.api_base_url", "https://api.telegram.org")
 	v.SetDefault("telegram.update_mode", "polling")

@@ -20,7 +20,7 @@ import (
 	"github.com/Xbai-hang/sotapi/internal/stats"
 )
 
-func TestEndToEndTimeoutAndOfflineRequestsReturnFallback(t *testing.T) {
+func TestEndToEndFallbackStartsWhenTimeoutTakesHumanOffline(t *testing.T) {
 	users := []routing.User{{ID: "alice", Channel: "telegram", Recipient: "123"}}
 	router, err := routing.NewRouter(
 		[]routing.Model{{ID: "human", PoolID: "pool"}},
@@ -30,7 +30,7 @@ func TestEndToEndTimeoutAndOfflineRequestsReturnFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err := availability.NewStore(users, availability.Config{Enabled: true, AfterMissedReplies: 1})
+	state, err := availability.NewStore(users, availability.Config{Enabled: true, AfterMissedReplies: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,14 +45,17 @@ func TestEndToEndTimeoutAndOfflineRequestsReturnFallback(t *testing.T) {
 	}
 	handler := mustHandler(t, service, HandlerConfig{Authenticator: mustAuthenticator(t), MaxBodyBytes: 1 << 20})
 
-	for requestNumber := 1; requestNumber <= 2; requestNumber++ {
+	for requestNumber := 1; requestNumber <= 3; requestNumber++ {
 		response := performRequest(handler, http.MethodPost, validRequestBody(false), "Bearer secret", "application/json")
-		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "fallback answer") {
+		if requestNumber == 1 && (response.Code != http.StatusGatewayTimeout || !strings.Contains(response.Body.String(), "request_timeout")) {
+			t.Fatalf("request %d response = %d %s", requestNumber, response.Code, response.Body.String())
+		}
+		if requestNumber > 1 && (response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "fallback answer")) {
 			t.Fatalf("request %d response = %d %s", requestNumber, response.Code, response.Body.String())
 		}
 	}
-	if deliverer.deliveries.Load() != 1 {
-		t.Fatalf("human deliveries = %d, want 1", deliverer.deliveries.Load())
+	if deliverer.deliveries.Load() != 2 {
+		t.Fatalf("human deliveries = %d, want 2", deliverer.deliveries.Load())
 	}
 }
 
