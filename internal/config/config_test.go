@@ -29,6 +29,7 @@ users:
 	t.Setenv("SOTAPI_AUTH_API_KEYS", "environment-key,second-key")
 	t.Setenv("SOTAPI_TELEGRAM_BOT_TOKEN", "environment-token")
 	t.Setenv("SOTAPI_TELEGRAM_WEBHOOK_SECRET_TOKEN", "environment-webhook-secret")
+	t.Setenv("SOTAPI_FALLBACK_LLM_API_KEY", "environment-provider-key")
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -58,8 +59,11 @@ users:
 	if !cfg.Human.AutoOffline.Enabled || cfg.Human.AutoOffline.AfterMissedReplies != 3 || cfg.Human.ReasoningTemplate == "" {
 		t.Fatalf("human defaults = %#v", cfg.Human)
 	}
-	if cfg.Fallback.Mode != "template" || cfg.Fallback.Template == "" {
+	if cfg.Fallback.Mode != "template" || cfg.Fallback.Template == "" || cfg.Fallback.LLM.Timeout != 30*time.Second || cfg.Fallback.LLM.Stream {
 		t.Fatalf("fallback defaults = %#v", cfg.Fallback)
+	}
+	if cfg.Fallback.LLM.APIKey != "environment-provider-key" {
+		t.Fatalf("LLM API key environment override = %q", cfg.Fallback.LLM.APIKey)
 	}
 }
 
@@ -82,8 +86,14 @@ human:
     enabled: false
     after_missed_replies: 5
 fallback:
-  mode: template
+  mode: llm
   template: fallback answer
+  llm:
+    base_url: https://llm.example.com
+    api_key: provider-key
+    model: fallback-model
+    timeout: 12s
+    stream: true
 telegram:
   bot_token: token
   api_base_url: https://telegram.example.com
@@ -115,8 +125,11 @@ users:
 	if cfg.Human.ResponseTimeout != 45*time.Second || cfg.Telegram.RetryInterval != 250*time.Millisecond || cfg.Human.AutoOffline.AfterMissedReplies != 5 || cfg.Human.AutoOffline.Enabled {
 		t.Fatalf("runtime config = %#v", cfg)
 	}
-	if cfg.Human.ReasoningTemplate != "waiting" || cfg.Fallback.Mode != "template" || cfg.Fallback.Template != "fallback answer" {
+	if cfg.Human.ReasoningTemplate != "waiting" || cfg.Fallback.Mode != "llm" || cfg.Fallback.Template != "fallback answer" {
 		t.Fatalf("response config = %#v", cfg)
+	}
+	if cfg.Fallback.LLM.BaseURL != "https://llm.example.com" || cfg.Fallback.LLM.APIKey != "provider-key" || cfg.Fallback.LLM.Model != "fallback-model" || cfg.Fallback.LLM.Timeout != 12*time.Second || !cfg.Fallback.LLM.Stream {
+		t.Fatalf("LLM fallback config = %#v", cfg.Fallback.LLM)
 	}
 	if cfg.Auth.Mode != "none" || len(cfg.Auth.APIKeys) != 0 {
 		t.Fatalf("auth config = %#v", cfg.Auth)
@@ -203,8 +216,11 @@ func TestValidateRejectsInvalidRuntimeValues(t *testing.T) {
 		{name: "response timeout", mutate: func(c *Config) { c.Human.ResponseTimeout = 0 }, wantErr: "human.response_timeout"},
 		{name: "reasoning", mutate: func(c *Config) { c.Human.ReasoningTemplate = " " }, wantErr: "human.reasoning_template"},
 		{name: "missed replies", mutate: func(c *Config) { c.Human.AutoOffline.AfterMissedReplies = 0 }, wantErr: "human.auto_offline.after_missed_replies"},
-		{name: "fallback mode", mutate: func(c *Config) { c.Fallback.Mode = "openai" }, wantErr: "fallback.mode"},
+		{name: "fallback mode", mutate: func(c *Config) { c.Fallback.Mode = "magic" }, wantErr: "fallback.mode"},
 		{name: "fallback template", mutate: func(c *Config) { c.Fallback.Template = " " }, wantErr: "fallback.template"},
+		{name: "LLM base URL", mutate: func(c *Config) { enableLLMFallback(c); c.Fallback.LLM.BaseURL = "localhost" }, wantErr: "fallback.llm.base_url"},
+		{name: "LLM model", mutate: func(c *Config) { enableLLMFallback(c); c.Fallback.LLM.Model = " " }, wantErr: "fallback.llm.model"},
+		{name: "LLM timeout", mutate: func(c *Config) { enableLLMFallback(c); c.Fallback.LLM.Timeout = 0 }, wantErr: "fallback.llm.timeout"},
 		{name: "bot token", mutate: func(c *Config) { c.Telegram.BotToken = "" }, wantErr: "bot_token"},
 		{name: "Telegram URL", mutate: func(c *Config) { c.Telegram.APIBaseURL = "ftp://example.com" }, wantErr: "telegram.api_base_url"},
 		{name: "update mode", mutate: func(c *Config) { c.Telegram.UpdateMode = "both" }, wantErr: "update_mode"},
@@ -248,7 +264,7 @@ func validConfig() Config {
 			ReasoningTemplate: "waiting",
 			AutoOffline:       AutoOfflineConfig{Enabled: true, AfterMissedReplies: 3},
 		},
-		Fallback: FallbackConfig{Mode: "template", Template: "fallback answer"},
+		Fallback: FallbackConfig{Mode: "template", Template: "fallback answer", LLM: LLMFallbackConfig{Timeout: 30 * time.Second}},
 		Telegram: TelegramConfig{
 			BotToken:      "token",
 			APIBaseURL:    "https://api.telegram.org",
@@ -259,6 +275,15 @@ func validConfig() Config {
 		Models: []ModelConfig{{ID: "human", PoolID: "friends"}},
 		Pools:  []PoolConfig{{ID: "friends", UserIDs: []string{"alice"}}},
 		Users:  []UserConfig{{ID: "alice", Channel: "telegram", Recipient: "123"}},
+	}
+}
+
+func enableLLMFallback(config *Config) {
+	config.Fallback.Mode = "llm"
+	config.Fallback.LLM = LLMFallbackConfig{
+		BaseURL: "https://api.example.com",
+		Model:   "fallback-model",
+		Timeout: 30 * time.Second,
 	}
 }
 

@@ -191,7 +191,7 @@ func (s *Service) execute(ctx context.Context, request Request, emit StreamEmitt
 			return Response{}, fmt.Errorf("%w: %v", ErrRequestCanceled, err)
 		}
 		s.record(request.ID, target.User.ID, OutcomeDeliveryFailed, started)
-		return Response{}, fmt.Errorf("%w: %v", ErrDeliveryFailed, err)
+		return s.generateFallback(ctx, request, "", emit)
 	}
 	defer s.deliverer.Forget(delivery)
 
@@ -251,26 +251,29 @@ func (s *Service) execute(ctx context.Context, request Request, emit StreamEmitt
 }
 
 func (s *Service) generateFallback(ctx context.Context, request Request, reasoning string, emit StreamEmitter) (Response, error) {
+	if emit != nil {
+		err := s.fallback.Stream(ctx, request, emit)
+		if err != nil {
+			return Response{}, mapFallbackError(ctx, err)
+		}
+		return Response{ID: request.ID, Model: request.Model, Reasoning: reasoning}, nil
+	}
 	content, err := s.fallback.Generate(ctx, request)
 	if err != nil {
-		if errors.Is(context.Cause(ctx), ErrServiceReloading) {
-			return Response{}, ErrServiceReloading
-		}
-		if ctx.Err() != nil {
-			return Response{}, fmt.Errorf("%w: %v", ErrRequestCanceled, err)
-		}
-		return Response{}, fmt.Errorf("%w: %v", ErrFallbackFailed, err)
+		return Response{}, mapFallbackError(ctx, err)
 	}
 	response := Response{ID: request.ID, Model: request.Model, Reasoning: reasoning, Content: content}
-	if emit != nil {
-		if err := emit(StreamChunk{ID: request.ID, Model: request.Model, ContentDelta: content}); err != nil {
-			return Response{}, err
-		}
-		if err := emit(StreamChunk{ID: request.ID, Model: request.Model, Done: true}); err != nil {
-			return Response{}, err
-		}
-	}
 	return response, nil
+}
+
+func mapFallbackError(ctx context.Context, err error) error {
+	if errors.Is(context.Cause(ctx), ErrServiceReloading) {
+		return ErrServiceReloading
+	}
+	if ctx.Err() != nil {
+		return fmt.Errorf("%w: %v", ErrRequestCanceled, err)
+	}
+	return fmt.Errorf("%w: %v", ErrFallbackFailed, err)
 }
 
 func (s *Service) notifyOffline(parent context.Context, target routing.Target, missedReplies int) {

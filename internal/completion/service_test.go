@@ -343,9 +343,9 @@ func TestServiceReloadCancellationCleansUpPendingRequest(t *testing.T) {
 func TestServiceDeliveryFailure(t *testing.T) {
 	deliveryError := errors.New("network down")
 	service, deliverer, recorder := newTestService(t, deliveryError)
-	_, err := service.Complete(context.Background(), validRequest("delivery-1"))
-	if !errors.Is(err, ErrDeliveryFailed) || !strings.Contains(err.Error(), deliveryError.Error()) {
-		t.Fatalf("Complete() error = %v", err)
+	response, err := service.Complete(context.Background(), validRequest("delivery-1"))
+	if err != nil || response.Content != "fallback answer" {
+		t.Fatalf("Complete() = %#v, %v", response, err)
 	}
 	receive(t, deliverer.deliveries)
 	select {
@@ -355,6 +355,13 @@ func TestServiceDeliveryFailure(t *testing.T) {
 	}
 	if observation := receive(t, recorder.observations); observation.Outcome != OutcomeDeliveryFailed {
 		t.Fatalf("observation = %#v", observation)
+	}
+	status, ok := service.availability.Status("alice")
+	if !ok {
+		t.Fatal("availability status for alice not found")
+	}
+	if !status.Online || status.MissedReplies != 0 {
+		t.Fatalf("availability after delivery failure = %#v", status)
 	}
 }
 
