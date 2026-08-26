@@ -169,7 +169,7 @@ SotAPI 的核心请求生命周期不绑定某一家 LLM API。不同协议在�
 - 普通 JSON 与 `stream: true` 的 SSE 响应；
 - 单候选 `n=1`；
 - DeepSeek-style `reasoning_content`；
-- 真人离线、任务投递失败或回复超时时进入可配置的 fallback；
+- 用户池没有在线真人时进入可配置的 fallback；
 - 与当前协议一致的错误结构。
 
 MVP 目前聚焦文本；Tool Calling、Structured Output、多模态内容及其他 Adapter 的进度见[开发路线](https://github.com/Xbai-hang/sotapi/wiki/Development-Roadmap)。
@@ -185,7 +185,7 @@ MVP 目前聚焦文本；Tool Calling、Structured Output、多模态内容及�
 
 真人默认在线。开启 `human.auto_offline.enabled` 后，连续达到配置次数仍未在响应时限内回复会自动离线，并收到 Telegram 通知；发送 `/online` 可恢复在线并清零连续未回复次数。
 
-Fallback 默认直接返回 `fallback.template`。将 `fallback.mode` 设为 `llm` 后，真人离线、任务投递失败或回复超时时会先请求 `fallback.llm` 中配置的 OpenAI-compatible Chat Completions 服务；调用失败时仍返回模板：
+Fallback 默认直接返回 `fallback.template`。将 `fallback.mode` 设为 `llm` 后，用户池没有在线真人时会先请求 `fallback.llm` 中配置的 OpenAI-compatible Chat Completions 服务；调用失败时仍返回模板：
 
 ```yaml
 fallback:

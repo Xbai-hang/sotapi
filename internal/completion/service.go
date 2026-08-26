@@ -191,7 +191,7 @@ func (s *Service) execute(ctx context.Context, request Request, emit StreamEmitt
 			return Response{}, fmt.Errorf("%w: %v", ErrRequestCanceled, err)
 		}
 		s.record(request.ID, target.User.ID, OutcomeDeliveryFailed, started)
-		return s.generateFallback(ctx, request, "", emit)
+		return Response{}, fmt.Errorf("%w: %v", ErrDeliveryFailed, err)
 	}
 	defer s.deliverer.Forget(delivery)
 
@@ -221,7 +221,10 @@ func (s *Service) execute(ctx context.Context, request Request, emit StreamEmitt
 			if transition.BecameOffline {
 				s.notifyOffline(ctx, target, transition.MissedReplies)
 			}
-			return s.generateFallback(ctx, request, s.reasoning, emit)
+			if !s.availability.IsOnline(target.User.ID) {
+				return s.generateFallback(ctx, request, s.reasoning, emit)
+			}
+			return Response{}, ErrRequestTimeout
 		}
 		s.record(request.ID, target.User.ID, OutcomeCanceled, started)
 		return Response{}, fmt.Errorf("%w: %v", ErrRequestCanceled, err)

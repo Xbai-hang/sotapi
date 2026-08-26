@@ -154,10 +154,15 @@ func TestFallbackRejectsProviderFailuresAndHonorsContext(t *testing.T) {
 }
 
 func TestFallbackHonorsConfiguredTimeout(t *testing.T) {
+	release := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
-		<-request.Context().Done()
+		select {
+		case <-request.Context().Done():
+		case <-release:
+		}
 	}))
 	defer server.Close()
+	defer close(release)
 	fallback := mustFallback(t, Config{BaseURL: server.URL, Model: "model", Timeout: time.Millisecond})
 	if _, err := fallback.Generate(context.Background(), completion.Request{Messages: []completion.Message{{Role: "user", Content: "hello"}}}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Generate() timeout error = %v", err)

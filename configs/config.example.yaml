@@ -22,7 +22,8 @@ human:
     after_missed_replies: 3
 
 fallback:
-  # Use llm to try an OpenAI-compatible model before returning the template.
+  # Use llm when the user pool has no online human. Provider failures return
+  # the template below.
   mode: template
   template: "The human responder is currently unavailable. Please try again later."
   llm:

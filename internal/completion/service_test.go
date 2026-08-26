@@ -98,8 +98,8 @@ func TestServiceTimeoutCleansUpAndRejectsLateReply(t *testing.T) {
 	request.Timeout = 20 * time.Millisecond
 
 	response, err := service.Complete(context.Background(), request)
-	if err != nil || response.Content != "fallback answer" || response.Reasoning != "A human is thinking." {
-		t.Fatalf("Complete() = %#v, %v", response, err)
+	if !errors.Is(err, ErrRequestTimeout) || response != (Response{}) {
+		t.Fatalf("Complete() = %#v, %v, want ErrRequestTimeout", response, err)
 	}
 	receive(t, deliverer.deliveries)
 	receive(t, deliverer.forgotten)
@@ -112,6 +112,10 @@ func TestServiceTimeoutCleansUpAndRejectsLateReply(t *testing.T) {
 	if count := pendingCount(service.pending); count != 0 {
 		t.Fatalf("pending entries = %d, want 0", count)
 	}
+	status, _ := service.availability.Status("alice")
+	if !status.Online || status.MissedReplies != 1 {
+		t.Fatalf("availability after one timeout = %#v", status)
+	}
 }
 
 func TestServiceThirdMissedReplyTakesUserOfflineAndNotifiesOnce(t *testing.T) {
@@ -120,7 +124,10 @@ func TestServiceThirdMissedReplyTakesUserOfflineAndNotifiesOnce(t *testing.T) {
 		request := validRequest(fmt.Sprintf("timeout-%d", attempt))
 		request.Timeout = 10 * time.Millisecond
 		response, err := service.Complete(context.Background(), request)
-		if err != nil || response.Content != "fallback answer" {
+		if attempt < 3 && !errors.Is(err, ErrRequestTimeout) {
+			t.Fatalf("attempt %d error = %v, want ErrRequestTimeout", attempt, err)
+		}
+		if attempt == 3 && (err != nil || response.Content != "fallback answer") {
 			t.Fatalf("attempt %d Complete() = %#v, %v", attempt, response, err)
 		}
 		receive(t, deliverer.deliveries)
@@ -142,13 +149,54 @@ func TestServiceThirdMissedReplyTakesUserOfflineAndNotifiesOnce(t *testing.T) {
 	}
 }
 
+func TestServiceConcurrentTimeoutsUseFallbackAfterHumanGoesOffline(t *testing.T) {
+	deliverer := newFakeDeliverer(nil)
+	fallback, err := NewTemplateFallback("fallback answer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := availability.NewStore(
+		[]routing.User{{ID: "alice", Channel: "telegram", Recipient: "123"}},
+		availability.Config{Enabled: true, AfterMissedReplies: 1},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(testRouter(t), deliverer, nil, state, fallback, ServiceConfig{RequestTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	results := make(chan completionResult, 2)
+	for attempt := 1; attempt <= 2; attempt++ {
+		request := validRequest(fmt.Sprintf("concurrent-timeout-%d", attempt))
+		request.Timeout = 50 * time.Millisecond
+		go func() {
+			response, err := service.Complete(context.Background(), request)
+			results <- completionResult{response: response, err: err}
+		}()
+	}
+	receive(t, deliverer.deliveries)
+	receive(t, deliverer.deliveries)
+	for range 2 {
+		result := receive(t, results)
+		if result.err != nil || result.response.Content != "fallback answer" {
+			t.Fatalf("concurrent Complete() = %#v, %v", result.response, result.err)
+		}
+	}
+}
+
 func TestServiceNoOnlineUserReturnsImmediateFallbackWithoutDelivery(t *testing.T) {
 	service, deliverer, _ := newTestService(t, nil)
 	for attempt := 1; attempt <= 3; attempt++ {
 		request := validRequest(fmt.Sprintf("offline-%d", attempt))
 		request.Timeout = time.Millisecond
-		if _, err := service.Complete(context.Background(), request); err != nil {
-			t.Fatal(err)
+		_, err := service.Complete(context.Background(), request)
+		if attempt < 3 && !errors.Is(err, ErrRequestTimeout) {
+			t.Fatalf("attempt %d error = %v, want ErrRequestTimeout", attempt, err)
+		}
+		if attempt == 3 && err != nil {
+			t.Fatalf("attempt %d error = %v", attempt, err)
 		}
 		receive(t, deliverer.deliveries)
 		receive(t, deliverer.forgotten)
@@ -174,8 +222,8 @@ func TestServiceReplyAndOnlineCommandResetMissedReplies(t *testing.T) {
 	service, deliverer, _ := newTestService(t, nil)
 	request := validRequest("miss-once")
 	request.Timeout = time.Millisecond
-	if _, err := service.Complete(context.Background(), request); err != nil {
-		t.Fatal(err)
+	if _, err := service.Complete(context.Background(), request); !errors.Is(err, ErrRequestTimeout) {
+		t.Fatalf("first timeout error = %v, want ErrRequestTimeout", err)
 	}
 	receive(t, deliverer.deliveries)
 	receive(t, deliverer.forgotten)
@@ -201,8 +249,12 @@ func TestServiceReplyAndOnlineCommandResetMissedReplies(t *testing.T) {
 	for attempt := 0; attempt < 3; attempt++ {
 		timedOut := validRequest(fmt.Sprintf("online-%d", attempt))
 		timedOut.Timeout = time.Millisecond
-		if _, err := service.Complete(context.Background(), timedOut); err != nil {
-			t.Fatal(err)
+		_, err := service.Complete(context.Background(), timedOut)
+		if attempt < 2 && !errors.Is(err, ErrRequestTimeout) {
+			t.Fatalf("attempt %d error = %v, want ErrRequestTimeout", attempt+1, err)
+		}
+		if attempt == 2 && err != nil {
+			t.Fatalf("attempt %d error = %v", attempt+1, err)
 		}
 		receive(t, deliverer.deliveries)
 		receive(t, deliverer.forgotten)
@@ -272,8 +324,8 @@ func TestServiceDisabledAutoOfflineContinuesRoutingAfterTimeouts(t *testing.T) {
 	for attempt := 0; attempt < 4; attempt++ {
 		request := validRequest(fmt.Sprintf("disabled-%d", attempt))
 		request.Timeout = time.Millisecond
-		if _, err := service.Complete(context.Background(), request); err != nil {
-			t.Fatal(err)
+		if _, err := service.Complete(context.Background(), request); !errors.Is(err, ErrRequestTimeout) {
+			t.Fatalf("attempt %d error = %v, want ErrRequestTimeout", attempt+1, err)
 		}
 		receive(t, deliverer.deliveries)
 		receive(t, deliverer.forgotten)
@@ -344,8 +396,8 @@ func TestServiceDeliveryFailure(t *testing.T) {
 	deliveryError := errors.New("network down")
 	service, deliverer, recorder := newTestService(t, deliveryError)
 	response, err := service.Complete(context.Background(), validRequest("delivery-1"))
-	if err != nil || response.Content != "fallback answer" {
-		t.Fatalf("Complete() = %#v, %v", response, err)
+	if !errors.Is(err, ErrDeliveryFailed) || !strings.Contains(err.Error(), deliveryError.Error()) || response != (Response{}) {
+		t.Fatalf("Complete() = %#v, %v, want ErrDeliveryFailed", response, err)
 	}
 	receive(t, deliverer.deliveries)
 	select {
