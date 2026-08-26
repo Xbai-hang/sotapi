@@ -417,6 +417,25 @@ func TestServiceDeliveryFailure(t *testing.T) {
 	}
 }
 
+func TestMapFallbackErrorPreservesLifecycleCause(t *testing.T) {
+	providerError := errors.New("provider failed")
+	if err := mapFallbackError(context.Background(), providerError); !errors.Is(err, ErrFallbackFailed) || !strings.Contains(err.Error(), providerError.Error()) {
+		t.Fatalf("provider error = %v", err)
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := mapFallbackError(canceled, providerError); !errors.Is(err, ErrRequestCanceled) {
+		t.Fatalf("canceled error = %v", err)
+	}
+
+	reloading, stop := context.WithCancelCause(context.Background())
+	stop(ErrServiceReloading)
+	if err := mapFallbackError(reloading, providerError); !errors.Is(err, ErrServiceReloading) {
+		t.Fatalf("reload error = %v", err)
+	}
+}
+
 func TestServiceStreamEmitterFailureCancelsPendingRequest(t *testing.T) {
 	service, deliverer, recorder := newTestService(t, nil)
 	emitterError := errors.New("client write failed")

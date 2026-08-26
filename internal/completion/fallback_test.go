@@ -65,6 +65,10 @@ func TestTemplateFallbackStreamValidatesContextAndEmitter(t *testing.T) {
 	if err := fallback.Stream(context.Background(), validRequest("nil-emitter"), nil); err == nil {
 		t.Fatal("Stream() with nil emitter succeeded")
 	}
+	emitterError := errors.New("emit failed")
+	if err := fallback.Stream(context.Background(), validRequest("emit-error"), func(StreamChunk) error { return emitterError }); !errors.Is(err, emitterError) {
+		t.Fatalf("Stream() emitter error = %v", err)
+	}
 }
 
 func TestFallbackChainRequiresBothFallbacks(t *testing.T) {
