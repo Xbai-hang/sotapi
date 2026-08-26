@@ -124,11 +124,15 @@ func buildRouter(cfg config.Config) (*routing.Router, error) {
 	for _, pool := range cfg.Pools {
 		pools = append(pools, routing.Pool{ID: pool.ID, UserIDs: pool.UserIDs})
 	}
+	return routing.NewRouter(models, pools, buildRoutingUsers(cfg))
+}
+
+func buildRoutingUsers(cfg config.Config) []routing.User {
 	users := make([]routing.User, 0, len(cfg.Users))
 	for _, user := range cfg.Users {
 		users = append(users, routing.User{ID: user.ID, Channel: user.Channel, Recipient: user.Recipient})
 	}
-	return routing.NewRouter(models, pools, users)
+	return users
 }
 
 func logStatistics(logger *slog.Logger, snapshots map[string]stats.UserStats) {
@@ -156,4 +160,12 @@ func (f *replyForwarder) SubmitReply(requestID, content string) error {
 		return errors.New("completion service is not ready")
 	}
 	return f.service.SubmitReply(requestID, content)
+}
+
+func (f *replyForwarder) SetOnline(channel, recipient string) error {
+	if f.service == nil {
+		return errors.New("completion service is not ready")
+	}
+	_, err := f.service.SetOnline(channel, recipient)
+	return err
 }

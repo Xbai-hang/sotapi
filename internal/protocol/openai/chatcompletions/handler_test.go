@@ -156,6 +156,7 @@ func TestHandlerMapsCompletionErrors(t *testing.T) {
 		{name: "invalid", err: fmt.Errorf("%w: bad", completion.ErrInvalidRequest), wantStatus: http.StatusBadRequest, wantCode: "invalid_request"},
 		{name: "timeout", err: completion.ErrRequestTimeout, wantStatus: http.StatusGatewayTimeout, wantCode: "request_timeout"},
 		{name: "canceled", err: completion.ErrRequestCanceled, wantStatus: http.StatusRequestTimeout, wantCode: "request_canceled"},
+		{name: "fallback", err: completion.ErrFallbackFailed, wantStatus: http.StatusBadGateway, wantCode: "fallback_failed"},
 		{name: "reloading", err: completion.ErrServiceReloading, wantStatus: http.StatusServiceUnavailable, wantCode: "service_reloading"},
 		{name: "delivery", err: completion.ErrDeliveryFailed, wantStatus: http.StatusBadGateway, wantCode: "channel_delivery_failed"},
 		{name: "internal", err: errors.New("unexpected"), wantStatus: http.StatusInternalServerError, wantCode: "internal_error"},

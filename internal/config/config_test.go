@@ -49,14 +49,17 @@ users:
 	if cfg.Server.StreamKeepAlive != 15*time.Second {
 		t.Fatalf("stream keep-alive default = %v", cfg.Server.StreamKeepAlive)
 	}
-	if cfg.RequestTimeout != 5*time.Minute || cfg.Telegram.PollTimeout != 30*time.Second {
-		t.Fatalf("duration defaults: request=%v poll=%v", cfg.RequestTimeout, cfg.Telegram.PollTimeout)
+	if cfg.Human.ResponseTimeout != 5*time.Minute || cfg.Telegram.PollTimeout != 30*time.Second {
+		t.Fatalf("duration defaults: response=%v poll=%v", cfg.Human.ResponseTimeout, cfg.Telegram.PollTimeout)
 	}
 	if cfg.Telegram.UpdateMode != "polling" || cfg.Telegram.DropPendingUpdates {
 		t.Fatalf("Telegram update defaults = %#v", cfg.Telegram)
 	}
-	if cfg.UnansweredThreshold != 3 || cfg.ReasoningTemplate == "" {
-		t.Fatalf("runtime defaults: threshold=%d reasoning=%q", cfg.UnansweredThreshold, cfg.ReasoningTemplate)
+	if !cfg.Human.AutoOffline.Enabled || cfg.Human.AutoOffline.AfterMissedReplies != 3 || cfg.Human.ReasoningTemplate == "" {
+		t.Fatalf("human defaults = %#v", cfg.Human)
+	}
+	if cfg.Fallback.Mode != "template" || cfg.Fallback.Template == "" {
+		t.Fatalf("fallback defaults = %#v", cfg.Fallback)
 	}
 }
 
@@ -72,9 +75,15 @@ server:
   max_body_bytes: 2048
 auth:
   mode: none
-request_timeout: 45s
-reasoning_template: waiting
-unanswered_threshold: 5
+human:
+  response_timeout: 45s
+  reasoning_template: waiting
+  auto_offline:
+    enabled: false
+    after_missed_replies: 5
+fallback:
+  mode: template
+  template: fallback answer
 telegram:
   bot_token: token
   api_base_url: https://telegram.example.com
@@ -103,8 +112,11 @@ users:
 	if cfg.Server.ListenAddress != "127.0.0.1:9090" || cfg.Server.ReadHeaderTimeout != 3*time.Second || cfg.Server.StreamKeepAlive != 5*time.Second || cfg.Server.MaxBodyBytes != 2048 {
 		t.Fatalf("server config = %#v", cfg.Server)
 	}
-	if cfg.RequestTimeout != 45*time.Second || cfg.Telegram.RetryInterval != 250*time.Millisecond || cfg.UnansweredThreshold != 5 {
+	if cfg.Human.ResponseTimeout != 45*time.Second || cfg.Telegram.RetryInterval != 250*time.Millisecond || cfg.Human.AutoOffline.AfterMissedReplies != 5 || cfg.Human.AutoOffline.Enabled {
 		t.Fatalf("runtime config = %#v", cfg)
+	}
+	if cfg.Human.ReasoningTemplate != "waiting" || cfg.Fallback.Mode != "template" || cfg.Fallback.Template != "fallback answer" {
+		t.Fatalf("response config = %#v", cfg)
 	}
 	if cfg.Auth.Mode != "none" || len(cfg.Auth.APIKeys) != 0 {
 		t.Fatalf("auth config = %#v", cfg.Auth)
@@ -188,9 +200,11 @@ func TestValidateRejectsInvalidRuntimeValues(t *testing.T) {
 		{name: "missing API keys", mutate: func(c *Config) { c.Auth.APIKeys = nil }, wantErr: "auth.api_keys"},
 		{name: "blank API key", mutate: func(c *Config) { c.Auth.APIKeys = []string{" "} }, wantErr: "auth.api_keys[0]"},
 		{name: "duplicate API key", mutate: func(c *Config) { c.Auth.APIKeys = []string{"same", "same"} }, wantErr: "duplicate"},
-		{name: "request timeout", mutate: func(c *Config) { c.RequestTimeout = 0 }, wantErr: "request_timeout"},
-		{name: "reasoning", mutate: func(c *Config) { c.ReasoningTemplate = " " }, wantErr: "reasoning_template"},
-		{name: "threshold", mutate: func(c *Config) { c.UnansweredThreshold = 0 }, wantErr: "unanswered_threshold"},
+		{name: "response timeout", mutate: func(c *Config) { c.Human.ResponseTimeout = 0 }, wantErr: "human.response_timeout"},
+		{name: "reasoning", mutate: func(c *Config) { c.Human.ReasoningTemplate = " " }, wantErr: "human.reasoning_template"},
+		{name: "missed replies", mutate: func(c *Config) { c.Human.AutoOffline.AfterMissedReplies = 0 }, wantErr: "human.auto_offline.after_missed_replies"},
+		{name: "fallback mode", mutate: func(c *Config) { c.Fallback.Mode = "openai" }, wantErr: "fallback.mode"},
+		{name: "fallback template", mutate: func(c *Config) { c.Fallback.Template = " " }, wantErr: "fallback.template"},
 		{name: "bot token", mutate: func(c *Config) { c.Telegram.BotToken = "" }, wantErr: "bot_token"},
 		{name: "Telegram URL", mutate: func(c *Config) { c.Telegram.APIBaseURL = "ftp://example.com" }, wantErr: "telegram.api_base_url"},
 		{name: "update mode", mutate: func(c *Config) { c.Telegram.UpdateMode = "both" }, wantErr: "update_mode"},
@@ -228,10 +242,13 @@ func validConfig() Config {
 			StreamKeepAlive:   15 * time.Second,
 			MaxBodyBytes:      1 << 20,
 		},
-		Auth:                AuthConfig{Mode: "api_key", APIKeys: []string{"secret"}},
-		RequestTimeout:      time.Minute,
-		ReasoningTemplate:   "waiting",
-		UnansweredThreshold: 3,
+		Auth: AuthConfig{Mode: "api_key", APIKeys: []string{"secret"}},
+		Human: HumanConfig{
+			ResponseTimeout:   time.Minute,
+			ReasoningTemplate: "waiting",
+			AutoOffline:       AutoOfflineConfig{Enabled: true, AfterMissedReplies: 3},
+		},
+		Fallback: FallbackConfig{Mode: "template", Template: "fallback answer"},
 		Telegram: TelegramConfig{
 			BotToken:      "token",
 			APIBaseURL:    "https://api.telegram.org",

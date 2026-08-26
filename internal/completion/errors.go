@@ -14,6 +14,9 @@ var (
 	ErrServiceReloading = errors.New("completion service is reloading")
 	// ErrDeliveryFailed indicates that the Channel could not deliver the task.
 	ErrDeliveryFailed = errors.New("completion delivery failed")
+	// ErrFallbackFailed indicates that the configured fallback could not
+	// generate a response.
+	ErrFallbackFailed = errors.New("completion fallback failed")
 	// ErrUnknownRequest indicates that a reply no longer has an active waiter.
 	ErrUnknownRequest = errors.New("unknown or completed request")
 )

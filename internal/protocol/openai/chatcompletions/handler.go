@@ -224,6 +224,8 @@ func mapCompletionError(err error) (int, apiError) {
 		return http.StatusServiceUnavailable, newAPIError("server_error", "service_reloading", "the service is reloading its configuration", nil)
 	case errors.Is(err, completion.ErrDeliveryFailed):
 		return http.StatusBadGateway, newAPIError("server_error", "channel_delivery_failed", "the request could not be delivered to the human", nil)
+	case errors.Is(err, completion.ErrFallbackFailed):
+		return http.StatusBadGateway, newAPIError("server_error", "fallback_failed", "the fallback response could not be generated", nil)
 	default:
 		return http.StatusInternalServerError, newAPIError("server_error", "internal_error", "an internal error occurred", nil)
 	}

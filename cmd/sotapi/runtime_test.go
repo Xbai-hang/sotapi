@@ -240,8 +240,15 @@ server:
 auth:
   mode: api_key
   api_keys: [secret]
-request_timeout: 5s
-reasoning_template: %q
+human:
+  response_timeout: 5s
+  reasoning_template: %q
+  auto_offline:
+    enabled: true
+    after_missed_replies: 3
+fallback:
+  mode: template
+  template: fallback answer
 telegram:
   bot_token: %q
   api_base_url: %q

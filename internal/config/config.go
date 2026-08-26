@@ -14,15 +14,35 @@ const defaultTelegramWebhookPath = "/webhooks/telegram"
 
 // Config is the complete phase-one SotAPI runtime configuration.
 type Config struct {
-	Server              ServerConfig   `mapstructure:"server"`
-	Auth                AuthConfig     `mapstructure:"auth"`
-	RequestTimeout      time.Duration  `mapstructure:"request_timeout"`
-	ReasoningTemplate   string         `mapstructure:"reasoning_template"`
-	UnansweredThreshold int            `mapstructure:"unanswered_threshold"`
-	Telegram            TelegramConfig `mapstructure:"telegram"`
-	Models              []ModelConfig  `mapstructure:"models"`
-	Pools               []PoolConfig   `mapstructure:"pools"`
-	Users               []UserConfig   `mapstructure:"users"`
+	Server   ServerConfig   `mapstructure:"server"`
+	Auth     AuthConfig     `mapstructure:"auth"`
+	Human    HumanConfig    `mapstructure:"human"`
+	Fallback FallbackConfig `mapstructure:"fallback"`
+	Telegram TelegramConfig `mapstructure:"telegram"`
+	Models   []ModelConfig  `mapstructure:"models"`
+	Pools    []PoolConfig   `mapstructure:"pools"`
+	Users    []UserConfig   `mapstructure:"users"`
+}
+
+// HumanConfig controls the lifecycle of requests sent to human responders.
+type HumanConfig struct {
+	ResponseTimeout   time.Duration     `mapstructure:"response_timeout"`
+	ReasoningTemplate string            `mapstructure:"reasoning_template"`
+	AutoOffline       AutoOfflineConfig `mapstructure:"auto_offline"`
+}
+
+// AutoOfflineConfig controls whether consecutive missed replies make a human
+// unavailable for new requests.
+type AutoOfflineConfig struct {
+	Enabled            bool `mapstructure:"enabled"`
+	AfterMissedReplies int  `mapstructure:"after_missed_replies"`
+}
+
+// FallbackConfig controls responses generated when no human answer is
+// available. Phase one supports the template mode.
+type FallbackConfig struct {
+	Mode     string `mapstructure:"mode"`
+	Template string `mapstructure:"template"`
 }
 
 // AuthConfig controls access to the public API. Mode is either api_key or
@@ -142,14 +162,20 @@ func (c Config) Validate() error {
 	if err := validateAuth(c.Auth); err != nil {
 		return err
 	}
-	if c.RequestTimeout <= 0 {
-		return errors.New("config: request_timeout must be positive")
+	if c.Human.ResponseTimeout <= 0 {
+		return errors.New("config: human.response_timeout must be positive")
 	}
-	if strings.TrimSpace(c.ReasoningTemplate) == "" {
-		return errors.New("config: reasoning_template is required")
+	if strings.TrimSpace(c.Human.ReasoningTemplate) == "" {
+		return errors.New("config: human.reasoning_template is required")
 	}
-	if c.UnansweredThreshold <= 0 {
-		return errors.New("config: unanswered_threshold must be positive")
+	if c.Human.AutoOffline.AfterMissedReplies <= 0 {
+		return errors.New("config: human.auto_offline.after_missed_replies must be positive")
+	}
+	if c.Fallback.Mode != "template" {
+		return fmt.Errorf("config: fallback.mode must be template, got %q", c.Fallback.Mode)
+	}
+	if strings.TrimSpace(c.Fallback.Template) == "" {
+		return errors.New("config: fallback.template is required in template mode")
 	}
 	if strings.TrimSpace(c.Telegram.BotToken) == "" {
 		return errors.New("config: telegram.bot_token or SOTAPI_TELEGRAM_BOT_TOKEN is required")
@@ -187,9 +213,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("server.max_body_bytes", int64(1<<20))
 	v.SetDefault("auth.mode", "api_key")
 	v.SetDefault("auth.api_keys", []string{})
-	v.SetDefault("request_timeout", "5m")
-	v.SetDefault("reasoning_template", "A human is thinking about your request.")
-	v.SetDefault("unanswered_threshold", 3)
+	v.SetDefault("human.response_timeout", "5m")
+	v.SetDefault("human.reasoning_template", "A human is thinking about your request.")
+	v.SetDefault("human.auto_offline.enabled", true)
+	v.SetDefault("human.auto_offline.after_missed_replies", 3)
+	v.SetDefault("fallback.mode", "template")
+	v.SetDefault("fallback.template", "The human responder is currently unavailable. Please try again later.")
 	v.SetDefault("telegram.bot_token", "")
 	v.SetDefault("telegram.api_base_url", "https://api.telegram.org")
 	v.SetDefault("telegram.update_mode", "polling")

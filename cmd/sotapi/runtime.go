@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"sync"
 
+	"github.com/Xbai-hang/sotapi/internal/availability"
 	"github.com/Xbai-hang/sotapi/internal/channel/telegram"
 	"github.com/Xbai-hang/sotapi/internal/completion"
 	"github.com/Xbai-hang/sotapi/internal/config"
@@ -130,7 +131,18 @@ func newRuntimeInstance(cfg config.Config, logger *slog.Logger) (*runtimeInstanc
 	if err != nil {
 		return nil, err
 	}
-	statistics, err := stats.NewStore(cfg.UnansweredThreshold)
+	statistics, err := stats.NewStore(cfg.Human.AutoOffline.AfterMissedReplies)
+	if err != nil {
+		return nil, err
+	}
+	state, err := availability.NewStore(buildRoutingUsers(cfg), availability.Config{
+		Enabled:            cfg.Human.AutoOffline.Enabled,
+		AfterMissedReplies: cfg.Human.AutoOffline.AfterMissedReplies,
+	})
+	if err != nil {
+		return nil, err
+	}
+	fallback, err := completion.NewTemplateFallback(cfg.Fallback.Template)
 	if err != nil {
 		return nil, err
 	}
@@ -149,9 +161,9 @@ func newRuntimeInstance(cfg config.Config, logger *slog.Logger) (*runtimeInstanc
 	if err != nil {
 		return nil, err
 	}
-	service, err := completion.NewService(router, telegramClient, statistics, completion.ServiceConfig{
-		RequestTimeout:    cfg.RequestTimeout,
-		ReasoningTemplate: cfg.ReasoningTemplate,
+	service, err := completion.NewService(router, telegramClient, statistics, state, fallback, completion.ServiceConfig{
+		RequestTimeout:    cfg.Human.ResponseTimeout,
+		ReasoningTemplate: cfg.Human.ReasoningTemplate,
 	})
 	if err != nil {
 		return nil, err

@@ -3,10 +3,12 @@ package completion
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Xbai-hang/sotapi/internal/availability"
 	"github.com/Xbai-hang/sotapi/internal/routing"
 )
 
@@ -95,9 +97,9 @@ func TestServiceTimeoutCleansUpAndRejectsLateReply(t *testing.T) {
 	request := validRequest("timeout-1")
 	request.Timeout = 20 * time.Millisecond
 
-	_, err := service.Complete(context.Background(), request)
-	if !errors.Is(err, ErrRequestTimeout) {
-		t.Fatalf("Complete() error = %v, want ErrRequestTimeout", err)
+	response, err := service.Complete(context.Background(), request)
+	if err != nil || response.Content != "fallback answer" || response.Reasoning != "A human is thinking." {
+		t.Fatalf("Complete() = %#v, %v", response, err)
 	}
 	receive(t, deliverer.deliveries)
 	receive(t, deliverer.forgotten)
@@ -109,6 +111,108 @@ func TestServiceTimeoutCleansUpAndRejectsLateReply(t *testing.T) {
 	}
 	if count := pendingCount(service.pending); count != 0 {
 		t.Fatalf("pending entries = %d, want 0", count)
+	}
+}
+
+func TestServiceThirdMissedReplyTakesUserOfflineAndNotifiesOnce(t *testing.T) {
+	service, deliverer, _ := newTestService(t, nil)
+	for attempt := 1; attempt <= 3; attempt++ {
+		request := validRequest(fmt.Sprintf("timeout-%d", attempt))
+		request.Timeout = 10 * time.Millisecond
+		response, err := service.Complete(context.Background(), request)
+		if err != nil || response.Content != "fallback answer" {
+			t.Fatalf("attempt %d Complete() = %#v, %v", attempt, response, err)
+		}
+		receive(t, deliverer.deliveries)
+		receive(t, deliverer.forgotten)
+	}
+
+	notification := receive(t, deliverer.notifications)
+	if notification.target.User.ID != "alice" || notification.notification.Kind != NotificationAutoOffline || notification.notification.MissedReplies != 3 {
+		t.Fatalf("notification = %#v", notification)
+	}
+	select {
+	case duplicate := <-deliverer.notifications:
+		t.Fatalf("duplicate notification = %#v", duplicate)
+	default:
+	}
+	status, _ := service.availability.Status("alice")
+	if status.Online || status.MissedReplies != 3 {
+		t.Fatalf("availability status = %#v", status)
+	}
+}
+
+func TestServiceNoOnlineUserReturnsImmediateFallbackWithoutDelivery(t *testing.T) {
+	service, deliverer, _ := newTestService(t, nil)
+	for attempt := 1; attempt <= 3; attempt++ {
+		request := validRequest(fmt.Sprintf("offline-%d", attempt))
+		request.Timeout = time.Millisecond
+		if _, err := service.Complete(context.Background(), request); err != nil {
+			t.Fatal(err)
+		}
+		receive(t, deliverer.deliveries)
+		receive(t, deliverer.forgotten)
+	}
+	receive(t, deliverer.notifications)
+
+	started := time.Now()
+	response, err := service.Complete(context.Background(), validRequest("fallback-now"))
+	if err != nil || response.Content != "fallback answer" || response.Reasoning != "" {
+		t.Fatalf("Complete() = %#v, %v", response, err)
+	}
+	if time.Since(started) > 100*time.Millisecond {
+		t.Fatal("fallback for offline user was not immediate")
+	}
+	select {
+	case delivery := <-deliverer.deliveries:
+		t.Fatalf("offline user received delivery %#v", delivery)
+	default:
+	}
+}
+
+func TestServiceReplyAndOnlineCommandResetMissedReplies(t *testing.T) {
+	service, deliverer, _ := newTestService(t, nil)
+	request := validRequest("miss-once")
+	request.Timeout = time.Millisecond
+	if _, err := service.Complete(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	receive(t, deliverer.deliveries)
+	receive(t, deliverer.forgotten)
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := service.Complete(context.Background(), validRequest("reply-reset"))
+		result <- err
+	}()
+	receive(t, deliverer.deliveries)
+	if err := service.SubmitReply("reply-reset", "answer"); err != nil {
+		t.Fatal(err)
+	}
+	if err := receive(t, result); err != nil {
+		t.Fatal(err)
+	}
+	receive(t, deliverer.forgotten)
+	status, _ := service.availability.Status("alice")
+	if status.MissedReplies != 0 || !status.Online {
+		t.Fatalf("status after reply = %#v", status)
+	}
+
+	for attempt := 0; attempt < 3; attempt++ {
+		timedOut := validRequest(fmt.Sprintf("online-%d", attempt))
+		timedOut.Timeout = time.Millisecond
+		if _, err := service.Complete(context.Background(), timedOut); err != nil {
+			t.Fatal(err)
+		}
+		receive(t, deliverer.deliveries)
+		receive(t, deliverer.forgotten)
+	}
+	if _, err := service.SetOnline("telegram", "123"); err != nil {
+		t.Fatalf("SetOnline() error = %v", err)
+	}
+	status, _ = service.availability.Status("alice")
+	if !status.Online || status.MissedReplies != 0 {
+		t.Fatalf("status after /online = %#v", status)
 	}
 }
 
@@ -129,6 +233,84 @@ func TestServiceCancellation(t *testing.T) {
 	receive(t, deliverer.forgotten)
 	if observation := receive(t, recorder.observations); observation.Outcome != OutcomeCanceled {
 		t.Fatalf("observation = %#v", observation)
+	}
+}
+
+func TestServiceCallerDeadlineDoesNotCountAsMissedReply(t *testing.T) {
+	service, deliverer, recorder := newTestService(t, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	request := validRequest("caller-deadline")
+	request.Timeout = time.Second
+
+	_, err := service.Complete(ctx, request)
+	if !errors.Is(err, ErrRequestCanceled) {
+		t.Fatalf("Complete() error = %v, want ErrRequestCanceled", err)
+	}
+	receive(t, deliverer.deliveries)
+	receive(t, deliverer.forgotten)
+	if observation := receive(t, recorder.observations); observation.Outcome != OutcomeCanceled {
+		t.Fatalf("observation = %#v", observation)
+	}
+	status, _ := service.availability.Status("alice")
+	if !status.Online || status.MissedReplies != 0 {
+		t.Fatalf("availability status = %#v", status)
+	}
+}
+
+func TestServiceDisabledAutoOfflineContinuesRoutingAfterTimeouts(t *testing.T) {
+	deliverer := newFakeDeliverer(nil)
+	recorder := &fakeRecorder{observations: make(chan Observation, 8)}
+	fallback, err := NewTemplateFallback("fallback answer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(testRouter(t), deliverer, recorder, testAvailability(t, false), fallback, ServiceConfig{RequestTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 4; attempt++ {
+		request := validRequest(fmt.Sprintf("disabled-%d", attempt))
+		request.Timeout = time.Millisecond
+		if _, err := service.Complete(context.Background(), request); err != nil {
+			t.Fatal(err)
+		}
+		receive(t, deliverer.deliveries)
+		receive(t, deliverer.forgotten)
+	}
+	status, _ := service.availability.Status("alice")
+	if !status.Online || status.MissedReplies != 0 {
+		t.Fatalf("availability status = %#v", status)
+	}
+	select {
+	case notification := <-deliverer.notifications:
+		t.Fatalf("unexpected notification = %#v", notification)
+	default:
+	}
+}
+
+func TestServiceStreamImmediatelyEmitsFallbackForOfflineUser(t *testing.T) {
+	service, deliverer, _ := newTestService(t, nil)
+	for range 3 {
+		if _, err := service.availability.RecordMissedReply("alice"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var chunks []StreamChunk
+	err := service.Stream(context.Background(), validRequest("offline-stream"), func(chunk StreamChunk) error {
+		chunks = append(chunks, chunk)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if len(chunks) != 2 || chunks[0].ContentDelta != "fallback answer" || chunks[0].ReasoningDelta != "" || !chunks[1].Done {
+		t.Fatalf("fallback chunks = %#v", chunks)
+	}
+	select {
+	case delivery := <-deliverer.deliveries:
+		t.Fatalf("offline user received delivery %#v", delivery)
+	default:
 	}
 }
 
@@ -240,16 +422,27 @@ func TestServiceRejectsDuplicateReply(t *testing.T) {
 func TestServiceValidation(t *testing.T) {
 	router := testRouter(t)
 	deliverer := newFakeDeliverer(nil)
-	if _, err := NewService(nil, deliverer, nil, ServiceConfig{RequestTimeout: time.Second}); err == nil {
+	state := testAvailability(t, true)
+	fallback, err := NewTemplateFallback("fallback")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewService(nil, deliverer, nil, state, fallback, ServiceConfig{RequestTimeout: time.Second}); err == nil {
 		t.Fatal("NewService() with nil router succeeded")
 	}
-	if _, err := NewService(router, nil, nil, ServiceConfig{RequestTimeout: time.Second}); err == nil {
+	if _, err := NewService(router, nil, nil, state, fallback, ServiceConfig{RequestTimeout: time.Second}); err == nil {
 		t.Fatal("NewService() with nil deliverer succeeded")
 	}
-	if _, err := NewService(router, deliverer, nil, ServiceConfig{}); err == nil {
+	if _, err := NewService(router, deliverer, nil, nil, fallback, ServiceConfig{RequestTimeout: time.Second}); err == nil {
+		t.Fatal("NewService() with nil availability succeeded")
+	}
+	if _, err := NewService(router, deliverer, nil, state, nil, ServiceConfig{RequestTimeout: time.Second}); err == nil {
+		t.Fatal("NewService() with nil fallback succeeded")
+	}
+	if _, err := NewService(router, deliverer, nil, state, fallback, ServiceConfig{}); err == nil {
 		t.Fatal("NewService() with zero timeout succeeded")
 	}
-	service, err := NewService(router, deliverer, nil, ServiceConfig{RequestTimeout: time.Second})
+	service, err := NewService(router, deliverer, nil, state, fallback, ServiceConfig{RequestTimeout: time.Second})
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
@@ -273,6 +466,9 @@ func TestServiceValidation(t *testing.T) {
 	}
 	if err := service.SubmitReply("request", "   "); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("SubmitReply(empty content) error = %v", err)
+	}
+	if _, err := service.SetOnline("", "123"); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("SetOnline(empty channel) error = %v, want ErrInvalidRequest", err)
 	}
 	if _, err := service.Complete(context.Background(), Request{Model: "missing", Messages: []Message{{Role: "user"}}}); !errors.Is(err, routing.ErrModelNotFound) {
 		t.Fatalf("Complete(unknown model) error = %v", err)
@@ -320,16 +516,23 @@ type deliveredTask struct {
 }
 
 type fakeDeliverer struct {
-	deliveries chan deliveredTask
-	forgotten  chan Delivery
-	err        error
+	deliveries    chan deliveredTask
+	forgotten     chan Delivery
+	notifications chan deliveredNotification
+	err           error
+}
+
+type deliveredNotification struct {
+	target       routing.Target
+	notification Notification
 }
 
 func newFakeDeliverer(err error) *fakeDeliverer {
 	return &fakeDeliverer{
-		deliveries: make(chan deliveredTask, 8),
-		forgotten:  make(chan Delivery, 8),
-		err:        err,
+		deliveries:    make(chan deliveredTask, 8),
+		forgotten:     make(chan Delivery, 8),
+		notifications: make(chan deliveredNotification, 8),
+		err:           err,
 	}
 }
 
@@ -343,6 +546,10 @@ func (d *fakeDeliverer) Deliver(_ context.Context, target routing.Target, task T
 
 func (d *fakeDeliverer) Forget(delivery Delivery) {
 	d.forgotten <- delivery
+}
+
+func (d *fakeDeliverer) Notify(_ context.Context, target routing.Target, notification Notification) {
+	d.notifications <- deliveredNotification{target: target, notification: notification}
 }
 
 type fakeRecorder struct {
@@ -362,7 +569,11 @@ func newTestService(t *testing.T, deliveryError error) (*Service, *fakeDeliverer
 	t.Helper()
 	deliverer := newFakeDeliverer(deliveryError)
 	recorder := &fakeRecorder{observations: make(chan Observation, 8)}
-	service, err := NewService(testRouter(t), deliverer, recorder, ServiceConfig{
+	fallback, err := NewTemplateFallback("fallback answer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(testRouter(t), deliverer, recorder, testAvailability(t, true), fallback, ServiceConfig{
 		RequestTimeout:    time.Second,
 		ReasoningTemplate: "A human is thinking.",
 	})
@@ -370,6 +581,18 @@ func newTestService(t *testing.T, deliveryError error) (*Service, *fakeDeliverer
 		t.Fatalf("NewService() error = %v", err)
 	}
 	return service, deliverer, recorder
+}
+
+func testAvailability(t *testing.T, enabled bool) *availability.Store {
+	t.Helper()
+	store, err := availability.NewStore(
+		[]routing.User{{ID: "alice", Channel: "telegram", Recipient: "123"}},
+		availability.Config{Enabled: enabled, AfterMissedReplies: 3},
+	)
+	if err != nil {
+		t.Fatalf("availability.NewStore() error = %v", err)
+	}
+	return store
 }
 
 func testRouter(t *testing.T) *routing.Router {

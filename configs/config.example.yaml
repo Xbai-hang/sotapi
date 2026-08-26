@@ -14,9 +14,18 @@ auth:
   mode: api_key
   api_keys:
     - "replace-with-a-secret"
-request_timeout: 5m
-reasoning_template: "A human is thinking about your request."
-unanswered_threshold: 3
+human:
+  response_timeout: 5m
+  reasoning_template: "A human is thinking about your request."
+  auto_offline:
+    enabled: true
+    after_missed_replies: 3
+
+fallback:
+  # Phase one supports template. Additional providers can be added without
+  # changing the human response policy above.
+  mode: template
+  template: "The human responder is currently unavailable. Please try again later."
 
 telegram:
   bot_token: "replace-with-a-telegram-bot-token"

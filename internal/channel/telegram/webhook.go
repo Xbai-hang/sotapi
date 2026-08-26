@@ -78,7 +78,7 @@ func (c *Client) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if err := c.handleUpdate(update); err != nil {
+	if err := c.handleUpdateContext(request.Context(), update); err != nil {
 		c.logUpdateError(request.Context(), update.UpdateID, err)
 	}
 	writer.WriteHeader(http.StatusNoContent)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -59,7 +60,7 @@ func (c *Client) runPolling(ctx context.Context) error {
 			if update.UpdateID >= offset {
 				offset = update.UpdateID + 1
 			}
-			if err := c.handleUpdate(update); err != nil {
+			if err := c.handleUpdateContext(ctx, update); err != nil {
 				c.logUpdateError(ctx, update.UpdateID, err)
 			}
 		}
@@ -89,9 +90,24 @@ func (c *Client) getUpdates(ctx context.Context, offset int64) ([]telegramUpdate
 }
 
 func (c *Client) handleUpdate(update telegramUpdate) error {
+	return c.handleUpdateContext(context.Background(), update)
+}
+
+func (c *Client) handleUpdateContext(ctx context.Context, update telegramUpdate) error {
 	message := update.Message
 	if message == nil {
 		c.logger.Debug("telegram update ignored", "update_id", update.UpdateID, "reason", "no message")
+		return nil
+	}
+	if strings.TrimSpace(message.Text) == "/online" {
+		recipient := strconv.FormatInt(message.Chat.ID, 10)
+		if err := c.replies.SetOnline(channelName, recipient); err != nil {
+			return fmt.Errorf("set online for %s recipient %s: %w", channelName, recipient, err)
+		}
+		if _, err := c.sendMessage(ctx, recipient, "已恢复在线，连续未回复次数已清零。"); err != nil {
+			return fmt.Errorf("confirm online for %s recipient %s: %w", channelName, recipient, err)
+		}
+		c.logger.Info("telegram user restored online", "update_id", update.UpdateID, "chat_id", message.Chat.ID)
 		return nil
 	}
 	if message.ReplyToMessage == nil {

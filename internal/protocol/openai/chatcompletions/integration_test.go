@@ -9,14 +9,52 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/Xbai-hang/sotapi/internal/availability"
 	"github.com/Xbai-hang/sotapi/internal/channel/telegram"
 	"github.com/Xbai-hang/sotapi/internal/completion"
 	"github.com/Xbai-hang/sotapi/internal/routing"
 	"github.com/Xbai-hang/sotapi/internal/stats"
 )
+
+func TestEndToEndTimeoutAndOfflineRequestsReturnFallback(t *testing.T) {
+	users := []routing.User{{ID: "alice", Channel: "telegram", Recipient: "123"}}
+	router, err := routing.NewRouter(
+		[]routing.Model{{ID: "human", PoolID: "pool"}},
+		[]routing.Pool{{ID: "pool", UserIDs: []string{"alice"}}},
+		users,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := availability.NewStore(users, availability.Config{Enabled: true, AfterMissedReplies: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallback, err := completion.NewTemplateFallback("fallback answer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deliverer := &timeoutIntegrationDeliverer{}
+	service, err := completion.NewService(router, deliverer, nil, state, fallback, completion.ServiceConfig{RequestTimeout: 5 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := mustHandler(t, service, HandlerConfig{Authenticator: mustAuthenticator(t), MaxBodyBytes: 1 << 20})
+
+	for requestNumber := 1; requestNumber <= 2; requestNumber++ {
+		response := performRequest(handler, http.MethodPost, validRequestBody(false), "Bearer secret", "application/json")
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "fallback answer") {
+			t.Fatalf("request %d response = %d %s", requestNumber, response.Code, response.Body.String())
+		}
+	}
+	if deliverer.deliveries.Load() != 1 {
+		t.Fatalf("human deliveries = %d, want 1", deliverer.deliveries.Load())
+	}
+}
 
 func TestEndToEndHTTPDeliveryAndTelegramReply(t *testing.T) {
 	sentText := make(chan string)
@@ -111,7 +149,18 @@ func TestEndToEndHTTPDeliveryAndTelegramReply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("telegram.NewClient() error = %v", err)
 	}
-	service, err := completion.NewService(router, telegramClient, statistics, completion.ServiceConfig{
+	state, err := availability.NewStore(
+		[]routing.User{{ID: "alice", Channel: "telegram", Recipient: "123"}},
+		availability.Config{Enabled: true, AfterMissedReplies: 3},
+	)
+	if err != nil {
+		t.Fatalf("availability.NewStore() error = %v", err)
+	}
+	fallback, err := completion.NewTemplateFallback("fallback answer")
+	if err != nil {
+		t.Fatalf("completion.NewTemplateFallback() error = %v", err)
+	}
+	service, err := completion.NewService(router, telegramClient, statistics, state, fallback, completion.ServiceConfig{
 		RequestTimeout:    time.Second,
 		ReasoningTemplate: "human thinking",
 	})
@@ -155,11 +204,33 @@ type integrationReplyForwarder struct {
 	service *completion.Service
 }
 
+type timeoutIntegrationDeliverer struct {
+	deliveries atomic.Int32
+}
+
+func (d *timeoutIntegrationDeliverer) Deliver(_ context.Context, _ routing.Target, task completion.Task) (completion.Delivery, error) {
+	d.deliveries.Add(1)
+	return completion.Delivery{ID: task.RequestID}, nil
+}
+
+func (*timeoutIntegrationDeliverer) Forget(completion.Delivery) {}
+
+func (*timeoutIntegrationDeliverer) Notify(context.Context, routing.Target, completion.Notification) {
+}
+
 func (f *integrationReplyForwarder) SubmitReply(requestID, content string) error {
 	if f.service == nil {
 		return errors.New("service is not ready")
 	}
 	return f.service.SubmitReply(requestID, content)
+}
+
+func (f *integrationReplyForwarder) SetOnline(channel, recipient string) error {
+	if f.service == nil {
+		return errors.New("service is not ready")
+	}
+	_, err := f.service.SetOnline(channel, recipient)
+	return err
 }
 
 func writeIntegrationJSON(t *testing.T, writer http.ResponseWriter, value any) {
