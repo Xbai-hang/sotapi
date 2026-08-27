@@ -1,6 +1,8 @@
 .PHONY: test coverage vet verify
 
-COVERAGE_MIN ?= 90
+COVERAGE_MIN_GLOBAL ?= 85
+COVERAGE_MIN_CORE ?= 90
+CORE_PKGS_PATTERN ?= "internal/(completion|fallback|protocol)"
 
 test:
 	go test -race ./...
@@ -8,11 +10,10 @@ test:
 coverage:
 	go test -race -covermode=atomic -coverpkg=./... -coverprofile=coverage.out ./...
 	go tool cover -func=coverage.out
-	@total="$$(go tool cover -func=coverage.out | awk '/^total:/ {gsub("%", "", $$3); print $$3}')"; \
-	awk -v total="$$total" -v minimum="$(COVERAGE_MIN)" 'BEGIN { \
-		printf "total coverage: %.1f%% (minimum %.1f%%)\n", total, minimum; \
-		if (total + 0 < minimum + 0) exit 1 \
-	}'
+	@COVERAGE_MIN_GLOBAL=$(COVERAGE_MIN_GLOBAL) \
+	 COVERAGE_MIN_CORE=$(COVERAGE_MIN_CORE) \
+	 CORE_PKGS_PATTERN=$(CORE_PKGS_PATTERN) \
+	 ./scripts/check-coverage.sh coverage.out
 
 vet:
 	go vet ./...

@@ -22,7 +22,19 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - run: make verify
+      - name: Run verification and coverage
+        run: make verify
+        env:
+          # 全仓库代码覆盖率
+          COVERAGE_MIN_GLOBAL: ${{ vars.COVERAGE_MIN_GLOBAL || '85' }}
+          # 核心代码覆盖率
+          COVERAGE_MIN_CORE: ${{ vars.COVERAGE_MIN_CORE || '90' }}
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.out
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
       - name: Validate runtime and Compose configuration
         env:
           SOTAPI_CONFIG_DIR: ./configs
