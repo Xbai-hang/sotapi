@@ -48,7 +48,7 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ steps.image.outputs.name }}
-          flavor: latest=auto
+          flavor: latest=true
           tags: |
             type=ref,event=tag
 
