@@ -2,8 +2,9 @@
 
 [![Wiki](https://img.shields.io/badge/docs-Wiki-2F81F7?style=flat-square&logo=github&logoColor=white)](https://github.com/Xbai-hang/sotapi/wiki)
 [![CI](https://img.shields.io/github/actions/workflow/status/Xbai-hang/sotapi/ci.yml?style=flat-square&label=CI&logo=githubactions&logoColor=white)](https://github.com/Xbai-hang/sotapi/actions/workflows/ci.yml)
+[![Codecov](https://img.shields.io/codecov/c/github/Xbai-hang/sotapi?style=flat-square&logo=codecov)](https://codecov.io/gh/Xbai-hang/sotapi)
 [![Release](https://img.shields.io/github/v/release/Xbai-hang/sotapi?style=flat-square&logo=github)](https://github.com/Xbai-hang/sotapi/releases)
-[![Container](https://img.shields.io/badge/image-GHCR-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/Xbai-hang/sotapi/pkgs/container/sotapi)
+[![Container](https://img.shields.io/github/v/release/Xbai-hang/sotapi?style=flat-square&label=image&logo=docker&logoColor=white)](https://github.com/Xbai-hang/sotapi/pkgs/container/sotapi)
 [![Go](https://img.shields.io/github/go-mod/go-version/Xbai-hang/sotapi?style=flat-square&logo=go&logoColor=white)](go.mod)
 [![Telegram](https://img.shields.io/badge/channel-Telegram-26A5E4?style=flat-square&logo=telegram&logoColor=white)](https://core.telegram.org/bots/api)
 [![Toy Project](https://img.shields.io/badge/status-toy_project-FF69B4?style=flat-square)](#它怎么玩)
